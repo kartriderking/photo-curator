@@ -119,6 +119,11 @@ def index():
                         headers={"Cache-Control": "no-store"})
 
 
+@app.get('/api/health')
+def health():
+    return {'app': 'photo-curator', 'storage': 'sqlite'}
+
+
 @app.get('/assets/{name}')
 def frontend_asset(name: str):
     if name not in {'app.js', 'style.css'}:

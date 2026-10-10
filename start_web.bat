@@ -1,4 +1,16 @@
 @echo off
-cd /d %~dp0
-echo photo-curator Web 工作台: http://127.0.0.1:8618  (Ctrl+C 停止)
-.venv\Scripts\python.exe -m uvicorn scripts.webapp:app --host 127.0.0.1 --port 8618 --app-dir scripts
+setlocal
+chcp 65001 >nul
+cd /d "%~dp0"
+if not exist ".venv\Scripts\python.exe" (
+    echo 未找到 Python 环境，请先运行 setup.bat。
+    pause
+    exit /b 1
+)
+".venv\Scripts\python.exe" "scripts\launch_web.py" %*
+if errorlevel 1 (
+    echo.
+    echo 启动失败，请查看上方错误信息。
+    pause
+    exit /b 1
+)
