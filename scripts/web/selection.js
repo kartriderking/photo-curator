@@ -38,14 +38,20 @@ function finishRange(cancelled=false){
   renderPhotos();
  }
 }
-gallery.addEventListener('pointerdown',event=>{
- if(currentPage!=='results'||event.button!==0||!['mouse','pen'].includes(event.pointerType)||event.target.closest('input,select,textarea,label,a'))return;
+document.addEventListener('pointerdown',event=>{
+ if(currentPage!=='results'||event.button!==0||!['mouse','pen'].includes(event.pointerType)||document.querySelector('.overlay:not(.hidden)'))return;
+ if(event.target.closest('input,select,textarea,label,a,[contenteditable="true"]'))return;
+ const button=event.target.closest('button');if(button&&!button.hasAttribute('data-preview'))return;
+ // Include the surrounding whitespace where a file-manager-style drag usually starts.
+ const main=gallery.closest('.main'),bounds=main.getBoundingClientRect();
+ const help=$('page-results').querySelector('.selection-help').getBoundingClientRect();
+ if(!main.contains(event.target)||event.clientX<bounds.left||event.clientX>bounds.right||event.clientY<help.bottom)return;
  const entries=[...gallery.querySelectorAll('[data-card]')].map(element=>({element,row:filtered[Number(element.dataset.card)]})).filter(entry=>entry.row);
  if(!entries.length)return;
  rangeState={pointerId:event.pointerId,x:event.pageX,y:event.pageY,clientX:event.clientX,clientY:event.clientY,
              active:false,additive:event.ctrlKey||event.metaKey||event.shiftKey,before:new Set(selected),entries};
 });
-gallery.addEventListener('dragstart',event=>event.preventDefault());
+document.addEventListener('dragstart',event=>{if(rangeState)event.preventDefault();});
 document.addEventListener('pointermove',event=>{
  if(!rangeState||rangeState.pointerId!==event.pointerId)return;
  rangeState.clientX=event.clientX;rangeState.clientY=event.clientY;
@@ -59,7 +65,7 @@ document.addEventListener('pointercancel',event=>{if(rangeState?.pointerId===eve
 window.addEventListener('blur',()=>finishRange(true));
 window.addEventListener('scroll',()=>{if(rangeState?.active)paintRange();});
 document.addEventListener('click',event=>{
- if(performance.now()<suppressGalleryClickUntil&&gallery.contains(event.target)){event.preventDefault();event.stopImmediatePropagation();}
+ if(performance.now()<suppressGalleryClickUntil&&gallery.closest('.main').contains(event.target)){event.preventDefault();event.stopImmediatePropagation();}
 },true);
 document.addEventListener('keydown',event=>{
  if(event.key==='Escape'&&rangeState){finishRange(true);event.preventDefault();return;}
