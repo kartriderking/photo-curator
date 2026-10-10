@@ -3,7 +3,7 @@ import argparse
 import hashlib
 from pathlib import Path
 
-from common import OUTPUT_DIR
+from common import OUTPUT_DIR, PROJECT_ROOT
 from feature_config import PRESETS, normalize_options
 
 
@@ -14,7 +14,8 @@ def main():
     mode.add_argument('--features', help='gps,places,phash,quality,similar,classify,landmarks,trips,frames')
     mode.add_argument('--preset', choices=list(PRESETS), default='quick')
     mode.add_argument('--steps', help='兼容步骤号: 1元数据/2抽帧/3去重清晰度/4CLIP/5景点/6导出')
-    ap.add_argument('--job-dir', help='独立任务目录（报告/进度/快照）')
+    ap.add_argument('--job-dir', help='任务标识目录（仅日志和主动导出的 CSV）')
+    ap.add_argument('--db-path', help='SQLite 数据库路径，默认 cache/curator.sqlite3')
     ap.add_argument('--include-videos', action='store_true')
     ap.add_argument('--geo-mode', choices=['offline', 'online'], default='offline')
     ap.add_argument('--vlm-scope', choices=['scenic', 'no_gps', 'all'], default='scenic')
@@ -26,7 +27,7 @@ def main():
     ap.add_argument('--force', action='store_true', help='重算所选功能，其他结果保留')
     ap.add_argument('--skip-vlm', action='store_true', help='兼容旧命令，移除景点识别')
     ap.add_argument('--no-legacy-vlm', action='store_true', help='不复用模型来源未知的历史景点结果')
-    ap.add_argument('--export-only', action='store_true', help='仅刷新已有报告，无推理、无联网')
+    ap.add_argument('--export-only', action='store_true', help='从 SQLite 导出 CSV，无推理、无联网')
     args = ap.parse_args()
     features = args.features if args.features is not None else PRESETS[args.preset]
     export_only = args.export_only
@@ -41,9 +42,15 @@ def main():
     job_dir = Path(args.job_dir) if args.job_dir else OUTPUT_DIR / 'manual' / hashlib.sha1(str(Path(args.input_dir).resolve()).encode()).hexdigest()[:12]
     from pipeline import execute, export_results, prepare_legacy_snapshot
     if export_only:
-        if not (job_dir / 'snapshot.json').exists():
-            prepare_legacy_snapshot({'input_dir': args.input_dir, 'skip_vlm': args.skip_vlm}, job_dir)
-        export_results(job_dir)
+        from task_store import TaskStore
+        with TaskStore(path=args.db_path) as store:
+            if args.db_path is None:
+                store.migrate_legacy(PROJECT_ROOT / 'jobs.json', OUTPUT_DIR / 'jobs', OUTPUT_DIR / 'manual', OUTPUT_DIR / 'deletions.log')
+            if store.snapshot(job_dir) is None:
+                store.migrate_legacy(job_dir / 'legacy-jobs.json', job_dir.parent)
+            if store.snapshot(job_dir) is None:
+                prepare_legacy_snapshot({'input_dir': args.input_dir, 'skip_vlm': args.skip_vlm}, job_dir, db=store.db)
+            export_results(job_dir, db=store.db)
         print(f'结果已刷新: {job_dir / "results.csv"}')
         return
     body = vars(args).copy()
@@ -55,7 +62,7 @@ def main():
             options['features'] = [f for f in options['features'] if f != 'landmarks']
             if not options['features']:
                 ap.error('跳过 VLM 后没有选中的功能')
-        execute(args.input_dir, options, job_dir)
+        execute(args.input_dir, options, job_dir, db_path=args.db_path)
     except ValueError as ex:
         ap.error(str(ex))
 

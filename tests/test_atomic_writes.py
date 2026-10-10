@@ -1,5 +1,4 @@
 """Regression coverage for Windows readers blocking task progress/report writes."""
-import json
 import os
 import sys
 import tempfile
@@ -7,9 +6,10 @@ import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from pipeline import atomic_json, write_report
+from pipeline import write_report
 
 
 def sharing_error():
@@ -23,41 +23,47 @@ class AtomicWritesTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.path = self.root / 'progress.json'
-        atomic_json(self.path, {'done': 1})
+        self.path = self.root / 'results.csv'
+        write_report(pd.DataFrame([{'done': 1}]), self.root)
 
-    def test_transient_reader_preserves_old_json_until_replaced(self):
+    def write_next(self):
+        write_report(pd.DataFrame([{'done': 2}]), self.root)
+
+    def read_value(self):
+        return pd.read_csv(self.path)['done'].tolist()
+
+    def test_transient_reader_preserves_old_export_until_replaced(self):
         real_replace = os.replace
         calls = []
 
         def replace(src, dst):
             calls.append(1)
             if len(calls) < 3:
-                self.assertEqual(json.loads(self.path.read_text()), {'done': 1})
+                self.assertEqual(self.read_value(), [1])
                 raise sharing_error()
             return real_replace(src, dst)
 
         with patch('pipeline.os.replace', side_effect=replace), patch('pipeline.time.sleep'):
-            atomic_json(self.path, {'done': 2})
+            self.write_next()
         self.assertEqual(len(calls), 3)
-        self.assertEqual(json.loads(self.path.read_text()), {'done': 2})
-        self.assertEqual(list(self.root.glob('*.tmp')), [])
+        self.assertEqual(self.read_value(), [2])
+        self.assertEqual(list(self.root.glob('*.tmp.csv')), [])
 
-    def test_persistent_lock_is_bounded_and_keeps_previous_json(self):
+    def test_persistent_lock_is_bounded_and_keeps_previous_export(self):
         with patch('pipeline.os.replace', side_effect=sharing_error()) as replace, patch('pipeline.time.sleep'):
             with self.assertRaises(PermissionError):
-                atomic_json(self.path, {'done': 2})
+                self.write_next()
         self.assertEqual(replace.call_count, 9)
-        self.assertEqual(json.loads(self.path.read_text()), {'done': 1})
-        self.assertEqual(list(self.root.glob('*.tmp')), [])
+        self.assertEqual(self.read_value(), [1])
+        self.assertEqual(list(self.root.glob('*.tmp.csv')), [])
 
     def test_unrelated_io_error_is_not_retried(self):
         with patch('pipeline.os.replace', side_effect=OSError('disk error')) as replace, patch('pipeline.time.sleep') as sleep:
             with self.assertRaises(OSError):
-                atomic_json(self.path, {'done': 2})
+                self.write_next()
         self.assertEqual(replace.call_count, 1)
         sleep.assert_not_called()
-        self.assertEqual(json.loads(self.path.read_text()), {'done': 1})
+        self.assertEqual(self.read_value(), [1])
 
     def test_csv_report_retries_reader_lock(self):
         import pandas as pd
@@ -84,10 +90,10 @@ class AtomicWritesTest(unittest.TestCase):
         thread.start()
         self.assertTrue(ready.wait(2))
         try:
-            atomic_json(self.path, {'done': 2})
+            self.write_next()
         finally:
             thread.join()
-        self.assertEqual(json.loads(self.path.read_text()), {'done': 2})
+        self.assertEqual(self.read_value(), [2])
 
 
 if __name__ == '__main__':

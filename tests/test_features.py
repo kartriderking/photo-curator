@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from cache_db import CacheDB, canonical, item_for, version
 from feature_config import dependencies, normalize_options, signature
 from pipeline import execute, export_results, phash_groups, similar_groups
+from task_store import TaskStore
 
 
 class FeaturesTest(unittest.TestCase):
@@ -39,12 +40,16 @@ class FeaturesTest(unittest.TestCase):
         result = execute(self.library, normalize_options({'features': features, **options}), jd, self.db_path)
         return jd, result
 
+    def report(self, job_dir):
+        with TaskStore(path=self.db_path) as store:
+            return store.results(store.job_for_dir(job_dir)['id'])
+
     def test_only_gps_never_loads_ai_or_reads_pixels(self):
         item = self.photo('a.jpg')
         with patch.dict(sys.modules, {'torch': None, 'open_clip': None}), patch('pipeline.measure_image', side_effect=AssertionError('pixel decode')):
             jd, state = self.run_features(['gps'])
         import pandas as pd
-        report = pd.read_csv(jd / 'results.csv')
+        report = self.report(jd)
         self.assertEqual(len(report), 1)
         self.assertIn('GPS纬度', report.columns)
         self.assertNotIn('pHash', report.columns)
@@ -56,7 +61,7 @@ class FeaturesTest(unittest.TestCase):
         with patch.dict(sys.modules, {'torch': None, 'open_clip': None}):
             jd, state = self.run_features(['phash'])
         import pandas as pd
-        report = pd.read_csv(jd / 'results.csv')
+        report = self.report(jd)
         self.assertEqual(state['status'], 'done')
         self.assertEqual((report['建议标签'] == '可删-重复').sum(), 1)
         self.assertNotIn('清晰度', report.columns)
@@ -114,7 +119,8 @@ class FeaturesTest(unittest.TestCase):
         (self.library / 'bad.jpg').write_text('not an image')
         jd, state = self.run_features(['quality'])
         self.assertEqual(state['status'], 'partial')
-        self.assertTrue((jd / 'results.csv').exists())
+        self.assertFalse((jd / 'results.csv').exists())
+        self.assertEqual(len(self.report(jd)), 2)
         self.assertEqual(state['features']['quality']['status'], 'partial')
 
     def test_dependencies_do_not_add_models_to_light_tasks(self):
@@ -163,7 +169,7 @@ class FeaturesTest(unittest.TestCase):
             jd, state = self.run_features(['similar'])
         self.assertEqual(state['features']['similar']['cached'], 2)
         import pandas as pd
-        self.assertEqual((pd.read_csv(jd / 'results.csv')['建议标签'] == '待审-相似').sum(), 1)
+        self.assertEqual((self.report(jd)['建议标签'] == '待审-相似').sum(), 1)
 
     def test_only_vlm_all_no_clip_and_connection_failure_stops(self):
         import requests
@@ -200,7 +206,7 @@ class FeaturesTest(unittest.TestCase):
             geo.return_value.query.return_value = [{'name': 'Hangzhou'}]
             jd, state = self.run_features(['places', 'trips'])
         import pandas as pd
-        report = pd.read_csv(jd / 'results.csv')
+        report = self.report(jd)
         self.assertEqual(report.iloc[0]['城市(GPS)'], 'Hangzhou')
         self.assertEqual(report.iloc[0]['旅程编号'], 'T001')
         self.assertTrue(state['features']['gps']['implicit'])

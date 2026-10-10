@@ -1,15 +1,15 @@
 """Feature-driven incremental pipeline; export never runs inference, grouping or networking."""
 import hashlib
-import json
 import os
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from cache_db import CacheDB, canonical, clean, item_for, version
+from cache_db import CacheDB, canonical, item_for, version
 from common import CONFIG, IMAGE_EXTS, VIDEO_EXTS, CACHE_DIR, OUTPUT_DIR
 from feature_config import FEATURES, dependencies, signature
+from task_store import TaskStore
 
 
 def replace_atomic(tmp, path):
@@ -22,17 +22,6 @@ def replace_atomic(tmp, path):
             if getattr(ex, 'winerror', None) not in (5, 32, 33) or attempt == 8:
                 raise
             time.sleep(min(0.02 * 2 ** attempt, 0.32))
-
-
-def atomic_json(path, data):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
-    try:
-        tmp.write_text(json.dumps(clean(data), ensure_ascii=False, indent=1, allow_nan=False), encoding='utf-8')
-        replace_atomic(tmp, path)
-    finally:
-        tmp.unlink(missing_ok=True)
 
 
 def scan(root, include_videos):
@@ -156,25 +145,26 @@ def execute(root, options, job_dir, db_path=None):
     state = {'input_dir': str(Path(root).resolve()), 'options': options, 'status': 'running',
              'features': {f: {'status': 'pending' if f in active else 'skipped', 'implicit': f not in options['features']} for f in FEATURES},
              'started': time.time()}
-    snapshot = {'items': [], 'phash_groups': [], 'similar_groups': [], 'errors': {}, 'options': options}
+    snapshot = {'input_dir': str(Path(root).resolve()), 'items': [], 'phash_groups': [], 'similar_groups': [], 'errors': {}, 'options': options}
     errors = snapshot['errors']
     db = CacheDB(db_path)
-    last_export = [0.0]
+    store = TaskStore(db=db)
+    job = store.ensure_task(job_dir, root, options)
+    last_checkpoint = [0.0]
 
     def persist():
-        atomic_json(job_dir / 'progress.json', state)
+        store.save_progress(job['id'], state)
 
     def status(features, status_name, done=0, total=0, cached=0):
         for f in features:
             state['features'][f].update(status=status_name, done=done, total=total, cached=cached)
         persist()
 
-    def checkpoint(force_export=False):
-        if not force_export and time.monotonic() - last_export[0] < 30:
+    def checkpoint(force=False):
+        if not force and time.monotonic() - last_checkpoint[0] < 30:
             return
-        atomic_json(job_dir / 'snapshot.json', snapshot)
-        export_results(job_dir, db=db)
-        last_export[0] = time.monotonic()
+        refresh_results(job_dir, db=db, snapshot=snapshot)
+        last_checkpoint[0] = time.monotonic()
 
     def error(item, feature, ex):
         errors.setdefault(canonical(item['path']), {})[feature] = str(ex)[:180]
@@ -446,7 +436,7 @@ def execute(root, options, job_dir, db_path=None):
         state['finished'] = time.time()
         persist()
         checkpoint(True)
-        print(f'完成: {job_dir / "results.csv"}', flush=True)
+        print('完成: 整理结果已保存到 SQLite', flush=True)
         return state
     except BaseException as ex:
         state.update(status='failed', error=str(ex), finished=time.time())
@@ -463,16 +453,21 @@ def execute(root, options, job_dir, db_path=None):
         db.close()
 
 
-def export_results(job_dir, db=None):
-    """Read the task's snapshot and feature cache only; no scan/inference/network calls."""
+def refresh_results(job_dir, db=None, snapshot=None):
+    """Refresh SQLite rows from the snapshot/cache; never write CSV or run inference."""
     import pandas as pd
     job_dir = Path(job_dir)
-    snapshot = json.loads((job_dir / 'snapshot.json').read_text(encoding='utf-8'))
     own_db = db is None
     db = db or CacheDB()
-    opts = snapshot['options']
-    active = set(dependencies(opts))
     try:
+        store = TaskStore(db=db)
+        revision = None
+        if snapshot is None:
+            snapshot, revision = store.snapshot_version(job_dir)
+        if snapshot is None:
+            raise ValueError('任务尚无快照，请先运行所需功能')
+        opts = snapshot['options']
+        active = set(dependencies(opts))
         if 'legacy_rows' in snapshot:
             old_rows = []
             for i, original in zip(snapshot['items'], snapshot['legacy_rows']):
@@ -490,7 +485,8 @@ def export_results(job_dir, db=None):
                     row['建议标签'] = '待审-原保留项已删除'
                 old_rows.append(row)
             out = pd.DataFrame(old_rows, columns=None if old_rows else ['相对路径', '类型', '建议标签'])
-            write_report(out, job_dir)
+            if not store.save_results(job_dir, out, snapshot, expected_revision=revision):
+                out = store.results(store.job_for_dir(job_dir)['id'])
             return out
         items = []
         changed = set()
@@ -593,14 +589,23 @@ def export_results(job_dir, db=None):
                 previous = dt
         if '拍摄时间' in out.columns:
             out = out.sort_values('拍摄时间', na_position='last')
-        write_report(out, job_dir)
+        if not store.save_results(job_dir, out, snapshot, expected_revision=revision):
+            out = store.results(store.job_for_dir(job_dir)['id'])
         return out
     finally:
         if own_db:
             db.close()
 
 
+def export_results(job_dir, db=None):
+    """Explicit command-line CSV export; normal analysis and refresh stay in SQLite."""
+    out = refresh_results(job_dir, db=db)
+    write_report(out, job_dir)
+    return out
+
+
 def write_report(out, job_dir):
+    Path(job_dir).mkdir(parents=True, exist_ok=True)
     tmp = Path(job_dir) / ('results.' + uuid.uuid4().hex + '.tmp.csv')
     try:
         out.to_csv(tmp, index=False, encoding='utf-8-sig')
@@ -609,7 +614,7 @@ def write_report(out, job_dir):
         tmp.unlink(missing_ok=True)
 
 
-def prepare_legacy_snapshot(job, job_dir):
+def prepare_legacy_snapshot(job, job_dir, db=None):
     """Bridge old tasks without recomputing models or changing original cache files."""
     import pandas as pd
     from feature_config import normalize_options
@@ -618,7 +623,9 @@ def prepare_legacy_snapshot(job, job_dir):
     job_dir = Path(job_dir)
     job_dir.mkdir(parents=True, exist_ok=True)
     snapshot = {'options': options, 'input_dir': job['input_dir'], 'items': [], 'errors': {}, 'phash_groups': [], 'similar_groups': []}
-    with CacheDB() as db:
+    own_db = db is None
+    db = db or CacheDB()
+    try:
         db.import_legacy()
         report = job_dir / 'results.csv'
         if report.exists():
@@ -642,4 +649,7 @@ def prepare_legacy_snapshot(job, job_dir):
                 if q.get('group') is not None:
                     groups.setdefault(q['group'], []).append((q.get('group_rank', 0), i['path']))
             snapshot['phash_groups'] = [[p for _, p in sorted(g)] for g in groups.values() if len(g) > 1]
-        atomic_json(job_dir / 'snapshot.json', snapshot)
+        TaskStore(db=db).save_snapshot(job_dir, snapshot)
+    finally:
+        if own_db:
+            db.close()

@@ -1,22 +1,22 @@
 # -*- coding: utf-8 -*-
 """photo-curator 本地 Web 工作台：任务提交/进度/结果/媒体预览。仅监听 127.0.0.1。"""
 import hashlib
-import json
 import subprocess
 import threading
 import time
 import uuid
 from pathlib import Path
 
-import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
 from common import CACHE_DIR, OUTPUT_DIR, PROJECT_ROOT, IMAGE_EXTS, VIDEO_EXTS
 from feature_config import normalize_options
+from task_store import TaskStore
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 JOBS_FILE = PROJECT_ROOT / "jobs.json"
+DB_PATH = CACHE_DIR / 'curator.sqlite3'
 JOB_DATA_DIR = PROJECT_ROOT / "output" / "jobs"
 PREVIEW_DIR = CACHE_DIR / "previews"
 PYTHON = str(PROJECT_ROOT / ".venv" / "Scripts" / "python.exe")
@@ -30,17 +30,16 @@ _thread = None
 # ---------- 任务持久化与执行 ----------
 
 def _load_jobs() -> dict:
-    if JOBS_FILE.exists():
-        try:
-            return json.loads(JOBS_FILE.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            pass
-    return {"jobs": []}
+    with TaskStore(path=DB_PATH) as store:
+        return {'jobs': store.list_jobs()}
 
 
-def _save_jobs(jobs: dict):
-    from pipeline import atomic_json
-    atomic_json(JOBS_FILE, jobs)
+def _get_job(job_id):
+    with TaskStore(path=DB_PATH) as store:
+        job = store.get_job(job_id)
+    if job is None:
+        raise HTTPException(404, '任务不存在')
+    return job
 
 
 def _run_loop():
@@ -48,20 +47,18 @@ def _run_loop():
     global _proc, _thread
     while True:
         with _lock:
-            jobs = _load_jobs()
-            nxt = next((j for j in jobs["jobs"] if j["status"] == "queued"), None)
-            if nxt:
-                nxt["status"] = "running"
-                nxt["started"] = time.strftime("%F %T")
-                _save_jobs(jobs)
+            with TaskStore(path=DB_PATH) as store:
+                nxt = store.claim_next()
             if not nxt:
                 _thread = None
                 return
-        log_f = open(JOB_DATA_DIR / nxt["id"] / "run.log", "a", encoding="utf-8", buffering=1)
+        task_dir = Path(nxt['task_dir'])
+        task_dir.mkdir(parents=True, exist_ok=True)
+        log_f = open(task_dir / "run.log", "a", encoding="utf-8", buffering=1)
         cmd = [PYTHON, str(PROJECT_ROOT / "scripts" / "run_all.py"),
                "--input-dir", nxt["input_dir"]]
         options = normalize_options(nxt.get("options") or nxt, legacy="options" not in nxt)
-        cmd += ["--features", ",".join(options["features"]), "--job-dir", str(JOB_DATA_DIR / nxt["id"]),
+        cmd += ["--features", ",".join(options["features"]), "--job-dir", str(task_dir), '--db-path', str(DB_PATH),
                 "--geo-mode", options["geo_mode"], "--vlm-scope", options["vlm_scope"],
                 "--vlm-model", options["vlm_model"], "--scenic-threshold", str(options["scenic_threshold"]),
                 "--similar-threshold", str(options["similar_threshold"]), "--dup-hamming", str(options["dup_hamming"]),
@@ -75,13 +72,11 @@ def _run_loop():
         try:
             _proc = subprocess.Popen(cmd, stdout=log_f, stderr=subprocess.STDOUT)
             with _lock:
-                jobs = _load_jobs()
-                current = next(x for x in jobs["jobs"] if x["id"] == nxt["id"])
-                current["pid"] = _proc.pid
+                with TaskStore(path=DB_PATH) as store:
+                    current = store.update_job(nxt['id'], {'pid': _proc.pid})
                 # A cancel may arrive while the subprocess is being started.
                 if current.get("cancel"):
                     _proc.terminate()
-                _save_jobs(jobs)
             code = _proc.wait()
         except Exception as ex:
             log_f.write(f"任务启动失败: {ex}\n")
@@ -89,13 +84,11 @@ def _run_loop():
         finally:
             log_f.close()
         with _lock:
-            jobs = _load_jobs()
-            j = next(x for x in jobs["jobs"] if x["id"] == nxt["id"])
-            state_file = JOB_DATA_DIR / nxt["id"] / "progress.json"
-            state = json.loads(state_file.read_text(encoding="utf-8")) if state_file.exists() else {}
-            j["status"] = "cancelled" if j.get("cancel") else (state.get("status", "done") if code == 0 else "failed")
-            j["finished"] = time.strftime("%F %T")
-            _save_jobs(jobs)
+            with TaskStore(path=DB_PATH) as store:
+                j = store.get_job(nxt['id'])
+                state = store.progress(j['id'])
+                status = 'cancelled' if j.get('cancel') else (state.get('status', 'done') if code == 0 else 'failed')
+                store.update_job(j['id'], {'status': status, 'finished': time.strftime('%F %T')})
         _proc = None
 
 
@@ -112,15 +105,11 @@ def _ensure_worker():
 @app.on_event("startup")
 def startup():
     with _lock:
-        jobs = _load_jobs()
-        changed = False
-        for j in jobs["jobs"]:
-            if j["status"] == "running":
-                j["status"] = "cancelled"
-                j["interrupted"] = True
-                changed = True
-        if changed:
-            _save_jobs(jobs)
+        with TaskStore(path=DB_PATH) as store:
+            store.migrate_legacy(JOBS_FILE, JOB_DATA_DIR, OUTPUT_DIR / 'manual', OUTPUT_DIR / 'deletions.log')
+            for j in store.list_jobs():
+                if j['status'] == 'running':
+                    store.update_job(j['id'], {'status': 'cancelled', 'interrupted': True})
     _ensure_worker()
 
 
@@ -173,11 +162,9 @@ def create_job(body: dict):
         "status": "queued",
         "created": time.strftime("%F %T"),
     }
-    (JOB_DATA_DIR / job["id"]).mkdir(parents=True, exist_ok=True)
     with _lock:
-        jobs = _load_jobs()
-        jobs["jobs"].insert(0, job)
-        _save_jobs(jobs)
+        with TaskStore(path=DB_PATH) as store:
+            job = store.create_job(job, JOB_DATA_DIR / job['id'])
     _ensure_worker()
     return job
 
@@ -187,21 +174,13 @@ def list_jobs():
     with _lock:
         jobs = _load_jobs()
     running = next((j for j in jobs["jobs"] if j["status"] == "running"), None)
-    selected = running or next((j for j in jobs['jobs'] if (JOB_DATA_DIR / j['id'] / 'progress.json').exists()), None)
+    selected = running or next(iter(jobs['jobs']), None)
     p = {}
     if selected:
-        state_file = JOB_DATA_DIR / selected['id'] / 'progress.json'
-        try:
-            p = json.loads(state_file.read_text(encoding='utf-8'))
-            p['job_id'] = selected['id']
-            if selected['status'] == 'cancelled':
-                p['status'] = 'cancelled'
-                for feature in p.get('features', {}).values():
-                    if feature['status'] in ('pending', 'running'):
-                        feature['status'] = 'cancelled'
-        except (OSError, ValueError):
-            pass
-    return_progress_log = JOB_DATA_DIR / selected['id'] / 'run.log' if selected else None
+        with TaskStore(path=DB_PATH) as store:
+            p = store.progress(selected['id'])
+        p['job_id'] = selected['id']
+    return_progress_log = Path(selected['task_dir']) / 'run.log' if selected else None
     if return_progress_log and return_progress_log.exists():
         with open(return_progress_log, 'rb') as f:
             f.seek(max(0, return_progress_log.stat().st_size - 2500))
@@ -215,57 +194,47 @@ def list_jobs():
 @app.post("/api/jobs/{job_id}/cancel")
 def cancel_job(job_id: str):
     with _lock:
-        jobs = _load_jobs()
-        j = next((x for x in jobs["jobs"] if x["id"] == job_id), None)
-        if not j:
-            raise HTTPException(404, "任务不存在")
-        if j["status"] == "queued":
-            j["status"] = "cancelled"
-            _save_jobs(jobs)
-        elif j["status"] == "running":
-            j["cancel"] = True
-            _save_jobs(jobs)
-            if _proc:
-                _proc.terminate()   # 管线全部断点续跑，可安全终止
+        with TaskStore(path=DB_PATH) as store:
+            j = store.get_job(job_id)
+            if not j:
+                raise HTTPException(404, "任务不存在")
+            if j['status'] == 'queued':
+                store.update_job(job_id, {'status': 'cancelled'})
+            elif j['status'] == 'running':
+                store.update_job(job_id, {'cancel': True})
+                if _proc:
+                    _proc.terminate()   # 管线全部断点续跑，可安全终止
     return {"ok": True}
 
 
 @app.post("/api/jobs/{job_id}/retry")
 def retry_job(job_id: str):
     with _lock:
-        jobs = _load_jobs()
-        j = next((x for x in jobs["jobs"] if x["id"] == job_id), None)
-        if not j:
-            raise HTTPException(404, "任务不存在")
-        if j['status'] in ('running', 'queued'):
-            raise HTTPException(409, '任务已在运行或排队中')
-        j["status"] = "queued"
-        if "options" not in j:
-            j["options"] = normalize_options(j, legacy=True)
-        j.pop("cancel", None)
-        j.pop("finished", None)
-        _save_jobs(jobs)
+        with TaskStore(path=DB_PATH) as store:
+            j = store.get_job(job_id)
+            if not j:
+                raise HTTPException(404, "任务不存在")
+            if j['status'] in ('running', 'queued'):
+                raise HTTPException(409, '任务已在运行或排队中')
+            store.update_job(job_id, {'status': 'queued', 'options': j.get('options') or normalize_options(j, legacy=True)},
+                             remove=('cancel', 'finished', 'interrupted'))
     _ensure_worker()
     return {"ok": True}
 
 
 @app.get("/api/jobs/{job_id}/results")
 def job_results(job_id: str, label: str = "", q: str = "", refresh: int = 0):
-    with _lock:
-        jobs = _load_jobs()
-    j = next((x for x in jobs["jobs"] if x["id"] == job_id), None)
-    if not j:
-        raise HTTPException(404, '任务不存在')
-    f = JOB_DATA_DIR / job_id / "results.csv"
-    if not f.exists() or refresh:
-        from pipeline import export_results, prepare_legacy_snapshot
-        task_dir = JOB_DATA_DIR / job_id
-        if not (task_dir / 'snapshot.json').exists():
-            if j['status'] in ('queued', 'running') and 'options' in j:
-                return {'total': 0, 'rows': []}
-            prepare_legacy_snapshot(j, task_dir)
-        export_results(task_dir)
-    df = pd.read_csv(f)
+    j = _get_job(job_id)
+    with TaskStore(path=DB_PATH) as store:
+        task_dir = Path(j['task_dir'])
+        if not store.has_results(job_id) or refresh:
+            from pipeline import refresh_results, prepare_legacy_snapshot
+            if store.snapshot(task_dir) is None:
+                if j['status'] in ('queued', 'running'):
+                    return {'total': 0, 'rows': []}
+                prepare_legacy_snapshot(j, task_dir, db=store.db)
+            refresh_results(task_dir, db=store.db)
+        df = store.results(job_id)
     if label:
         df = df[df["建议标签"].str.startswith(label, na=False)]
     if q:
@@ -284,13 +253,13 @@ def job_results(job_id: str, label: str = "", q: str = "", refresh: int = 0):
 
 @app.get('/api/jobs/{job_id}/export')
 def download_report(job_id: str):
-    with _lock:
-        if not any(j['id'] == job_id for j in _load_jobs()['jobs']):
-            raise HTTPException(404, '任务不存在')
-    f = JOB_DATA_DIR / job_id / 'results.csv'
-    if not f.exists():
-        raise HTTPException(404, '还没有结果，完成任一功能后可导出')
-    return FileResponse(f, filename=f'photos-{job_id}.csv', media_type='text/csv')
+    _get_job(job_id)
+    with TaskStore(path=DB_PATH) as store:
+        if not store.has_results(job_id):
+            raise HTTPException(404, '还没有结果，完成任一功能后可导出')
+        out = store.results(job_id)
+    return Response(content='\ufeff' + out.to_csv(index=False), media_type='text/csv; charset=utf-8',
+                    headers={'Content-Disposition': f'attachment; filename="photos-{job_id}.csv"'})
 
 
 @app.post("/api/delete")
@@ -326,17 +295,15 @@ def delete_files(body: dict):
         except Exception as ex:
             results.append({"path": p, "ok": False, "msg": str(ex)[:100]})
     if deleted:
-        with open(OUTPUT_DIR / "deletions.log", "a", encoding="utf-8") as f:
-            ts = time.strftime("%F %T")
-            for d in deleted:
-                f.write(f"{ts}\t{d}\n")
+        with TaskStore(path=DB_PATH) as store:
+            store.add_deletions(job_id, deleted)
     return {"deleted": len(deleted), "results": results}
 
 
 @app.get("/api/orphans")
 def orphans(job_id: str):
     """从删除日志找 Live Photo/同名配对中"只删了一边"的情况，
-    返回幸存的另一半（含其在结果 CSV 中的标签信息），供用户预览后决定是否补删。"""
+    返回幸存的另一半（含数据库中的标签信息），供用户预览后决定是否补删。"""
     with _lock:
         jobs = _load_jobs()
     j = next((x for x in jobs["jobs"] if x["id"] == job_id), None)
@@ -345,13 +312,8 @@ def orphans(job_id: str):
     base = Path(j["input_dir"]).resolve()
 
     deleted, deleted_ts = [], {}
-    logf = OUTPUT_DIR / "deletions.log"
-    if logf.exists():
-        for line in logf.read_text(encoding="utf-8").splitlines():
-            parts = line.split("\t", 1)
-            if len(parts) != 2:
-                continue
-            ts, p = parts[0].strip(), parts[1].strip()
+    with TaskStore(path=DB_PATH) as store:
+        for p, ts in store.deletion_records():
             try:
                 if Path(p).resolve().parent == base or base in Path(p).resolve().parents:
                     deleted.append(p)
@@ -361,11 +323,10 @@ def orphans(job_id: str):
     media_exts = IMAGE_EXTS | VIDEO_EXTS
     photo_exts = {".heic", ".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 
-    # 结果 CSV 里现存行的信息（标签/景点等），按绝对路径索引
+    # SQLite 中的标签/景点信息，按绝对路径索引
     info_by_abs = {}
-    f = JOB_DATA_DIR / job_id / "results.csv"
-    if f.exists():
-        df = pd.read_csv(f).fillna("")
+    with TaskStore(path=DB_PATH) as store:
+        df = store.results(job_id).fillna('')
         b = j["input_dir"].rstrip("\\/") + "\\"
         for _, r in df.iterrows():
             info_by_abs[(b + str(r.get("相对路径", "")).replace("/", "\\")).lower()] = r.to_dict()
@@ -406,14 +367,9 @@ def orphans(job_id: str):
 
 @app.get("/api/labels")
 def labels(job_id: str):
-    with _lock:
-        if not any(j['id'] == job_id for j in _load_jobs()['jobs']):
-            raise HTTPException(404, '任务不存在')
-    f = JOB_DATA_DIR / job_id / "results.csv"
-    if not f.exists():
-        return {"labels": []}
-    df = pd.read_csv(f)
-    return {"labels": df["建议标签"].value_counts().to_dict()}
+    _get_job(job_id)
+    with TaskStore(path=DB_PATH) as store:
+        return {'labels': store.label_counts(job_id)}
 
 
 # ---------- 媒体预览 ----------

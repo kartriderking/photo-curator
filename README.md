@@ -56,14 +56,14 @@ pHash 相近、CLIP 内容相似和模糊分数都只是整理建议。时间分
     .venv\Scripts\python scripts\run_all.py --input-dir "C:\Pictures" --features landmarks --vlm-scope all
     .venv\Scripts\python scripts\run_all.py --input-dir "C:\Pictures" --features frames
 
-完整分析或只刷新报告：
+完整分析或只导出已有结果：
 
     .venv\Scripts\python scripts\run_all.py --input-dir "C:\Pictures" --preset deep --include-videos
     .venv\Scripts\python scripts\run_all.py --input-dir "C:\Pictures" --export-only
 
 功能名：gps、places、phash、quality、similar、classify、landmarks、trips、frames。
 
---steps 兼容步骤号：1 元数据，2 抽帧，3 pHash / 清晰度，4 CLIP 分类 / 相似，5 景点，6 导出。独立执行也生成部分报告。
+--steps 兼容步骤号：1 元数据，2 抽帧，3 pHash / 清晰度，4 CLIP 分类 / 相似，5 景点，6 导出。独立执行也把部分结果保存到 SQLite；只有 --export-only 或 --steps 6 才生成 CSV。
 
 --force 重算所选功能，一般无需开启。高级参数包括 --dup-hamming、--similar-threshold、--scenic-threshold、--trip-gap-hours、--vlm-model。
 
@@ -71,12 +71,14 @@ pHash 相近、CLIP 内容相似和模糊分数都只是整理建议。时间分
 
 - scripts/：程序与前端；tests/：临时合成测试；docs/：安装说明。
 - models/：用户下载的权重；tools/：用户安装的外部工具，均不提交 Git。
-- cache/curator.sqlite3：增量分析数据库，按绝对路径、文件大小、纳秒修改时间和算法配置区分记录。
-- output/jobs/：网页任务报告；output/manual/：命令行报告，可通过 --job-dir 指定目录。
-- jobs.json：本机整理记录。
+- cache/curator.sqlite3：统一数据库，保存任务、进度、快照、结果、回收记录和增量分析缓存。缓存按绝对路径、文件大小、纳秒修改时间和算法配置区分记录。
+- output/jobs/：网页任务的诊断日志；output/manual/：命令行任务标识目录，可通过 --job-dir 指定。正常分析不生成 JSON / CSV 文件。
+- 网页导出：直接从 SQLite 生成 CSV 下载，不在任务目录额外保存报告。命令行 --export-only 把 CSV 保存到对应任务目录。
 - cache/frames/：默认视频帧目录，可通过 PHOTO_CURATOR_FRAMES_DIR 改变。
 
-数据目录首次使用时自动创建。从旧版升级时可导入可验证的旧缓存；历史景点的模型信息不完整时会注明来源。
+数据目录首次使用时自动创建。数据库使用 WAL 和短事务，让前端读取与后台写入同时进行；快照与整批结果在同一事务提交，中断时保留之前的完整结果。
+
+从旧版升级时，启动工作台会一次性导入 jobs.json、任务进度/快照、已有 CSV 和回收日志，不覆盖已经写入 SQLite 的更新记录，也不删除旧文件。建议升级前备份这些文件及数据库。旧分析缓存仍按文件身份验证后导入；历史景点的模型信息不完整时会注明来源。
 
 仓库排除了照片/视频、GPS 数据、报告、任务索引、日志、数据库、虚拟环境、模型权重和个人配置。不要强制添加这些内容到 Git。
 
