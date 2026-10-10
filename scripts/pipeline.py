@@ -12,12 +12,27 @@ from common import CONFIG, IMAGE_EXTS, VIDEO_EXTS, CACHE_DIR, OUTPUT_DIR
 from feature_config import FEATURES, dependencies, signature
 
 
+def replace_atomic(tmp, path):
+    """Keep the old file intact while a Windows reader briefly blocks replacement."""
+    for attempt in range(9):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError as ex:
+            if getattr(ex, 'winerror', None) not in (5, 32, 33) or attempt == 8:
+                raise
+            time.sleep(min(0.02 * 2 ** attempt, 0.32))
+
+
 def atomic_json(path, data):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
-    tmp.write_text(json.dumps(clean(data), ensure_ascii=False, indent=1, allow_nan=False), encoding='utf-8')
-    os.replace(tmp, path)
+    try:
+        tmp.write_text(json.dumps(clean(data), ensure_ascii=False, indent=1, allow_nan=False), encoding='utf-8')
+        replace_atomic(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def scan(root, include_videos):
@@ -438,8 +453,11 @@ def execute(root, options, job_dir, db_path=None):
         for info in state['features'].values():
             if info['status'] == 'running':
                 info['status'] = 'failed'
-        persist()
-        checkpoint(True)
+        try:
+            persist()
+            checkpoint(True)
+        except Exception as save_ex:
+            print(f'保存失败状态时出错: {save_ex}', flush=True)
         raise
     finally:
         db.close()
@@ -584,8 +602,11 @@ def export_results(job_dir, db=None):
 
 def write_report(out, job_dir):
     tmp = Path(job_dir) / ('results.' + uuid.uuid4().hex + '.tmp.csv')
-    out.to_csv(tmp, index=False, encoding='utf-8-sig')
-    os.replace(tmp, Path(job_dir) / 'results.csv')
+    try:
+        out.to_csv(tmp, index=False, encoding='utf-8-sig')
+        replace_atomic(tmp, Path(job_dir) / 'results.csv')
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def prepare_legacy_snapshot(job, job_dir):
