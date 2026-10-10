@@ -173,16 +173,17 @@ class TaskStore:
     def label_counts(self, job_id):
         return dict(self.conn.execute('SELECT label,count(*) FROM task_results WHERE task_id=? GROUP BY label', (job_id,)))
 
-    def results(self, job_id):
+    def results(self, job_id, include_revision=False):
         import pandas as pd
         # One read transaction guarantees columns and rows belong to the same checkpoint.
         with self.conn:
             self.conn.execute('BEGIN')
-            row = self.conn.execute('SELECT result_columns FROM tasks WHERE id=?', (job_id,)).fetchone()
+            row = self.conn.execute('SELECT result_columns,results_updated FROM tasks WHERE id=?', (job_id,)).fetchone()
             columns = json.loads(row[0]) if row and row[0] else []
             rows = [json.loads(r[0]) for r in self.conn.execute(
                 'SELECT data FROM task_results WHERE task_id=? ORDER BY ordinal', (job_id,))]
-        return pd.DataFrame(rows, columns=columns)
+        out = pd.DataFrame(rows, columns=columns)
+        return (out, row[1] if row else None) if include_revision else out
 
     def add_deletions(self, job_id, paths):
         with self.conn:

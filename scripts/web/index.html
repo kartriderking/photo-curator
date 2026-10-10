@@ -6,6 +6,7 @@
 <link rel="stylesheet" href="/assets/style.css">
 <script src="/assets/app.js" defer></script>
 <script src="/assets/pairs.js" defer></script>
+<script src="/assets/selection.js" defer></script>
 </head>
 <body>
 <svg aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden"><defs>
@@ -108,6 +109,7 @@
   <div class="result-tabs" id="result-tabs"></div>
   <div class="result-hint" id="result-hint"><svg class="icon"><use href="#i-info"/></svg><span>相似照片包含重复和近似候选。建议仅供参考，先放大或对比，再决定是否保留。</span></div>
   <div class="view-bar"><label class="check-label"><input type="checkbox" id="select-page">选中本页<span id="res-count"></span></label><div class="view-controls"><select id="sort-order" aria-label="照片排序"><option value="default">默认排序</option><option value="date-desc">最新拍摄在前</option><option value="date-asc">最早拍摄在前</option><option value="name">按文件名</option></select><div class="segmented"><button class="active" data-view="grid" title="缩略图" aria-label="缩略图视图"><svg class="icon"><use href="#i-grid"/></svg></button><button data-view="list" title="列表" aria-label="列表视图"><svg class="icon"><use href="#i-list"/></svg></button></div></div></div>
+  <p class="muted small selection-help">拖动框选本页，Ctrl / Shift 可追加；Ctrl+A 全选当前分类。建议保留项会自动跳过。</p>
   <div id="photo-results"></div><div id="pager" class="pager"></div>
 </section>
 <section id="page-pairs" class="hidden">

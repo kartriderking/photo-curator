@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """photo-curator 本地 Web 工作台：任务提交/进度/结果/媒体预览。仅监听 127.0.0.1。"""
 import hashlib
+import os
 import subprocess
 import threading
 import time
@@ -14,7 +15,7 @@ from common import CACHE_DIR, OUTPUT_DIR, PROJECT_ROOT, IMAGE_EXTS, VIDEO_EXTS
 from feature_config import normalize_options
 from task_store import TaskStore
 from live_photos import LivePhotoStore, run_scan, enumerate_media
-from cache_db import canonical
+from cache_db import canonical, version
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 JOBS_FILE = PROJECT_ROOT / "jobs.json"
@@ -45,6 +46,22 @@ def _get_job(job_id):
     if job is None:
         raise HTTPException(404, '任务不存在')
     return job
+
+
+def _path_key(path):
+    return os.path.normcase(os.path.abspath(path))
+
+
+def _keep_paths(base, records):
+    """Normalize stored report paths without touching every media file on gallery reads."""
+    result = set()
+    for row in records:
+        rel = row.get('同组最优')
+        if isinstance(rel, str) and rel:
+            path = Path(os.path.abspath(base / rel))
+            if base in path.parents:
+                result.add(_path_key(path))
+    return result
 
 
 def _run_loop():
@@ -134,7 +151,7 @@ def health():
 
 @app.get('/assets/{name}')
 def frontend_asset(name: str):
-    if name not in {'app.js', 'pairs.js', 'style.css'}:
+    if name not in {'app.js', 'pairs.js', 'selection.js', 'style.css'}:
         raise HTTPException(404, '文件不存在')
     return FileResponse(WEB_DIR / name, headers={'Cache-Control': 'no-store'})
 
@@ -247,7 +264,8 @@ def job_results(job_id: str, label: str = "", q: str = "", refresh: int = 0):
                     return {'total': 0, 'rows': []}
                 prepare_legacy_snapshot(j, task_dir, db=store.db)
             refresh_results(task_dir, db=store.db)
-        df = store.results(job_id)
+        df, report_revision = store.results(job_id, include_revision=True)
+    keep_paths = _keep_paths(Path(j['input_dir']).resolve(), df.fillna('').to_dict('records'))
     if label:
         df = df[df["建议标签"].str.startswith(label, na=False)]
     if q:
@@ -259,9 +277,10 @@ def job_results(job_id: str, label: str = "", q: str = "", refresh: int = 0):
         base = j["input_dir"].rstrip("\\/") + "\\"
         for r in rows:
             r["__abs"] = base + str(r.get("相对路径", "")).replace("/", "\\")
+            r['__protected_keep'] = _path_key(r['__abs']) in keep_paths
             best = str(r.get("同组最优", "") or "")
             r["__abs_best"] = base + best.replace("/", "\\") if best else ""
-    return JSONResponse({"total": len(df), "rows": rows})
+    return JSONResponse({"total": len(df), "rows": rows, 'report_revision': report_revision})
 
 
 @app.get('/api/jobs/{job_id}/export')
@@ -282,14 +301,28 @@ def delete_files(body: dict):
     from send2trash import send2trash
     job_id = body.get("job_id", "")
     paths = body.get("paths", [])
+    if not isinstance(paths, list) or len(paths) > 2000 or not all(isinstance(p, str) for p in paths):
+        raise HTTPException(400, '一次最多选择 2000 个文件')
     with _lock:
-        jobs = _load_jobs()
-    j = next((x for x in jobs["jobs"] if x["id"] == job_id), None)
+        with TaskStore(path=DB_PATH) as store:
+            j = store.get_job(job_id)
+            if j:
+                report, report_revision = store.results(job_id, include_revision=True)
+                records = report.fillna('').to_dict('records')
+                snapshot = store.snapshot(j['task_dir']) or {}
     if not j:
         raise HTTPException(404, "任务不存在")
+    if j['status'] in ('queued', 'running'):
+        raise HTTPException(409, '整理尚未结束，请等待结果稳定后再移入回收站')
+    if report_revision is None or body.get('report_revision') != report_revision:
+        raise HTTPException(409, '整理结果已更新，请刷新后重新选择照片')
     base = Path(j["input_dir"]).resolve()
+    keep_paths = _keep_paths(base, records)
+    bypath = {_path_key(base / r['相对路径']): r for r in records if r.get('相对路径')}
+    identities = {_path_key(i['path']): i['version'] for i in snapshot.get('items', [])}
+    validated_keeps = {}
     results, deleted = [], []
-    for p in paths[:2000]:   # 单次上限，防误操作批量过大
+    for p in dict.fromkeys(paths):
         try:
             f = Path(p)
             rf = f.resolve()
@@ -302,6 +335,28 @@ def delete_files(body: dict):
             if rf.suffix.lower() not in (IMAGE_EXTS | VIDEO_EXTS):
                 results.append({"path": p, "ok": False, "msg": "非媒体文件，拒绝删除"})
                 continue
+            key = _path_key(rf)
+            if key in keep_paths:
+                results.append({'path': p, 'ok': False, 'protected': True, 'msg': '这是本任务的建议保留照片，已保护'})
+                continue
+            row = bypath.get(key)
+            if row is None:
+                results.append({'path': p, 'ok': False, 'msg': '不在本次整理结果中，请刷新结果后再选择'})
+                continue
+            if key not in identities or version(rf) != identities[key]:
+                results.append({'path': p, 'ok': False, 'msg': '照片信息已变化或无法验证，请重新整理后再选择'})
+                continue
+            similar = row.get('建议标签') == '可删-重复' or '相似' in str(row.get('建议标签', ''))
+            if similar:
+                best = row.get('同组最优')
+                keeper = (base / best).resolve() if best else None
+                keep_key = _path_key(keeper) if keeper is not None else None
+                if keep_key not in validated_keeps:
+                    validated_keeps[keep_key] = bool(keeper is not None and base in keeper.parents and keeper.is_file()
+                                                    and keep_key in identities and version(keeper) == identities[keep_key])
+                if not validated_keeps[keep_key]:
+                    results.append({'path': p, 'ok': False, 'msg': '建议保留照片已缺失或发生变化，请重新检查'})
+                    continue
             send2trash(str(rf))   # 进回收站
             deleted.append(str(rf))
             results.append({"path": p, "ok": True})

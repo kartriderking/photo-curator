@@ -9,6 +9,10 @@ const categoryNames={all:'全部',similar:'相似照片',blurry:'模糊照片',d
 let jobs=[], currentPage='home', currentJob='', mode='quick', rows=[], filtered=[], category='all', view='grid', page=0;
 let requestVersion=0, jobsBusy=false, toastTimer, pickerCurrent='', pickerParent=null, pickerVersion=0, pickerTarget='dir', previewMode='results', previewIndex=-1, previewCompare=false, previousFocus=null, renderedJobsKey='', selectOptionsKey='';
 const selected=new Set(), pageSize=48;
+let resultRevision=null, keeperKeys=new Set();
+const fileKey=path=>String(path||'').replace(/\\/g,'/').toLowerCase();
+function photoSelectable(row){return !row['__protected_keep']&&!keeperKeys.has(fileKey(row['__abs']));}
+try{previewCompare=localStorage.getItem('light-album-compare')==='1';}catch{}
 
 async function api(path,body){
  let response,result;
@@ -110,13 +114,14 @@ async function loadResults(refresh=false){
  currentJob=id;try{localStorage.setItem('light-album-job',id);}catch{}
  try{
   const data=await api(`/api/jobs/${id}/results?refresh=${refresh?1:0}`);
-  if(ticket!==requestVersion)return;rows=data.rows||[];page=0;applyFilter();
+  if(ticket!==requestVersion)return;rows=data.rows||[];resultRevision=data.report_revision??null;keeperKeys=new Set(rows.filter(r=>r['__abs_best']).map(r=>fileKey(r['__abs_best'])));page=0;applyFilter();
   if(refresh)toast('已刷新已有结果');
  }catch(ex){if(ticket!==requestVersion)return;rows=[];filtered=[];$('photo-results').innerHTML=empty('暂时无法读取照片',ex.message);$('res-count').textContent='';toast(ex.message,true);}
 }
 function matches(row,type){const label=String(row['建议标签']||'');return type==='all'||({similar:label==='可删-重复'||/相似/.test(label),blurry:label==='可删-模糊',documents:/截图|文档/.test(label),travel:['景点','旅行素材'].includes(label)})[type];}
 function labelInfo(row){
  if(row['配对状态'])return [row['建议标签'],row['配对状态'].startsWith('missing_')?'amber':''];
+ if(!photoSelectable(row))return ['建议保留，已保护','green'];
  const l=String(row['建议标签']||'');
  if(l==='可删-重复'||/相似/.test(l))return ['相似照片，待确认','amber'];if(l==='可删-模糊')return ['可能模糊','amber'];if(/截图|文档/.test(l))return ['截图 / 文档',''];
  if(l==='景点')return [row['VLM景点']||'景点照片','blue'];if(l==='旅行素材')return ['旅行照片','blue'];
@@ -136,14 +141,15 @@ function thumbnail(row){return row['类型']==='video'?icon('play'):`<img src="/
 function renderPhotos(){
  const count=Math.max(1,Math.ceil(filtered.length/pageSize));page=Math.min(page,count-1);const start=page*pageSize;const visible=filtered.slice(start,start+pageSize);
  const content=visible.map((r,n)=>{
-  const index=start+n,label=labelInfo(r),checked=selected.has(r['__abs']);const location=r['VLM城市']||r['城市(GPS)']||r['地名'];const meta=[dateText(r['拍摄时间']),location].filter(Boolean).join(' · ')||(r['类型']==='video'?'视频':'照片');
-  if(view==='list')return `<tr class="${checked?'selected':''}"><td><input type="checkbox" data-check="${index}" aria-label="选择 ${esc(basename(r['相对路径']))}" ${checked?'checked':''}></td><td><div class="list-file">${thumbnail(r)}<button data-preview="${index}">${esc(basename(r['相对路径']))}</button></div></td><td>${esc(dateText(r['拍摄时间']))||'—'}</td><td>${esc(location)||'—'}</td><td><span class="pill ${label[1]}">${esc(label[0])}</span></td><td><button class="link-button" data-preview="${index}">查看</button></td></tr>`;
-  return `<article class="photo-card ${checked?'selected':''}" data-card="${index}"><label class="photo-checkbox"><input type="checkbox" data-check="${index}" aria-label="选择 ${esc(basename(r['相对路径']))}" ${checked?'checked':''}></label>${r['类型']==='video'?'<span class="photo-type">'+icon('play')+'视频</span>':''}<button class="photo-image" data-preview="${index}" aria-label="预览 ${esc(basename(r['相对路径']))}">${thumbnail(r)}</button><div class="photo-info"><div class="photo-name" title="${esc(r['相对路径'])}">${esc(basename(r['相对路径']))}</div><span class="pill ${label[1]}">${esc(label[0])}</span><div class="photo-meta">${esc(meta)}</div></div></article>`;
+  const index=start+n,label=labelInfo(r),selectable=photoSelectable(r);if(!selectable)selected.delete(r['__abs']);const checked=selected.has(r['__abs']);const location=r['VLM城市']||r['城市(GPS)']||r['地名'];const meta=[dateText(r['拍摄时间']),location].filter(Boolean).join(' · ')||(r['类型']==='video'?'视频':'照片');
+  const disabled=selectable?'':'disabled title="建议保留项已保护"';
+  if(view==='list')return `<tr data-card="${index}" class="${checked?'selected':''}"><td><input type="checkbox" data-check="${index}" aria-label="选择 ${esc(basename(r['相对路径']))}" ${checked?'checked':''} ${disabled}></td><td><div class="list-file">${thumbnail(r)}<button data-preview="${index}">${esc(basename(r['相对路径']))}</button></div></td><td>${esc(dateText(r['拍摄时间']))||'—'}</td><td>${esc(location)||'—'}</td><td><span class="pill ${label[1]}">${esc(label[0])}</span></td><td><button class="link-button" data-preview="${index}">查看</button></td></tr>`;
+  return `<article class="photo-card ${checked?'selected':''}" data-card="${index}"><label class="photo-checkbox"><input type="checkbox" data-check="${index}" aria-label="选择 ${esc(basename(r['相对路径']))}" ${checked?'checked':''} ${disabled}></label>${r['类型']==='video'?'<span class="photo-type">'+icon('play')+'视频</span>':''}<button class="photo-image" data-preview="${index}" aria-label="预览 ${esc(basename(r['相对路径']))}">${thumbnail(r)}</button><div class="photo-info"><div class="photo-name" title="${esc(r['相对路径'])}">${esc(basename(r['相对路径']))}</div><span class="pill ${label[1]}">${esc(label[0])}</span><div class="photo-meta">${esc(meta)}</div></div></article>`;
  }).join('');
  $('photo-results').innerHTML=visible.length?(view==='list'?'<div class="list-scroll"><table class="list-view"><thead><tr><th style="width:44px"></th><th>照片</th><th>拍摄时间</th><th>地点</th><th>整理建议</th><th></th></tr></thead><tbody>'+content+'</tbody></table></div>':'<div class="photo-grid">'+content+'</div>'):empty(rows.length?'没有找到符合条件的照片':'还没有可查看的照片',rows.length?'换个关键词或分类试试。':'整理进行中时，可以稍后点击刷新查看结果。');
  $('res-count').textContent=` · ${filtered.length} 项`;
  $('pager').innerHTML=filtered.length>pageSize?`<button data-page-turn="-1" ${page===0?'disabled':''}>上一页</button><span>${page+1} / ${count}</span><button data-page-turn="1" ${page===count-1?'disabled':''}>下一页</button>`:'';
- $('select-page').checked=!!visible.length&&visible.every(r=>selected.has(r['__abs']));$('select-page').indeterminate=visible.some(r=>selected.has(r['__abs']))&&!$('select-page').checked;$('select-page').disabled=!visible.length;
+ const eligible=visible.filter(photoSelectable);$('select-page').checked=!!eligible.length&&eligible.every(r=>selected.has(r['__abs']));$('select-page').indeterminate=eligible.some(r=>selected.has(r['__abs']))&&!$('select-page').checked;$('select-page').disabled=!eligible.length;
  $('photo-results').querySelectorAll('img').forEach(img=>img.addEventListener('error',()=>{const fallback=document.createElement('span');fallback.innerHTML=icon('photo');img.replaceWith(fallback);}));
  updateSelection();
 }
@@ -152,10 +158,11 @@ function updateSelection(){
  if(previewMode==='results'&&previewIndex>=0&&filtered[previewIndex])$('preview-select').checked=selected.has(filtered[previewIndex]['__abs']);
 }
 async function deleteSelected(){
+ const bypath=new Map(rows.map(r=>[r['__abs'],r]));selected.forEach(path=>{if(!bypath.has(path)||!photoSelectable(bypath.get(path)))selected.delete(path);});updateSelection();
  if(!selected.size)return;const paths=[...selected];
  if(!confirm(`将选中的 ${paths.length} 个文件移入回收站？\n\n请确认已看过照片。之后可以在 Windows 回收站中还原。`))return;
  $('delete-button').disabled=true;
- try{const data=await api('/api/delete',{job_id:currentJob,paths});const ok=new Set(data.results.filter(r=>r.ok).map(r=>r.path));rows=rows.filter(r=>!ok.has(r['__abs']));ok.forEach(p=>selected.delete(p));closeOverlay('preview-overlay');applyFilter();toast(`已移入回收站 ${data.deleted} 项${data.results.some(r=>!r.ok)?'，部分文件未成功处理':''}`);}catch(ex){toast(ex.message,true);}finally{$('delete-button').disabled=false;}
+ try{const data=await api('/api/delete',{job_id:currentJob,paths,report_revision:resultRevision});const ok=new Set(data.results.filter(r=>r.ok).map(r=>r.path));rows=rows.filter(r=>!ok.has(r['__abs']));ok.forEach(p=>selected.delete(p));closeOverlay('preview-overlay');applyFilter();toast(`已移入回收站 ${data.deleted} 项${data.results.some(r=>!r.ok)?'，部分文件被保护或未成功处理':''}`);}catch(ex){toast(ex.message,true);}finally{$('delete-button').disabled=false;}
 }
 function openOverlay(id){previousFocus=document.activeElement;$(id).classList.remove('hidden');document.body.style.overflow='hidden';$(id).querySelector('button,input')?.focus();}
 function closeOverlay(id){$(id).classList.add('hidden');if(id==='preview-overlay'){$('preview-media').innerHTML='';previewIndex=-1;}document.body.style.overflow='';if(previousFocus?.isConnected)previousFocus.focus();}
@@ -163,21 +170,20 @@ async function browseFolder(path=''){
  const ticket=++pickerVersion;pickerCurrent='';$('folder-confirm').disabled=true;$('folder-list').innerHTML='<p class="muted small" style="padding:18px">正在读取文件夹…</p>';
  try{const data=await api('/api/folders?path='+encodeURIComponent(path));if(ticket!==pickerVersion)return;pickerCurrent=data.path;pickerParent=data.parent;$('folder-path').value=data.path;$('folder-up').disabled=data.parent===null;$('folder-confirm').disabled=!data.path;$('folder-caption').textContent=data.path?(pickerTarget==='pair-dir'?'选择当前文件夹检查实况 UUID 配对。':'将整理此文件夹及其子文件夹中的照片。'):'选择一个磁盘，进入照片所在的文件夹。';$('folder-list').innerHTML=data.folders.length?data.folders.map(f=>`<button class="picker-folder" data-browse="${esc(f.path)}">${icon('folder')}<span>${esc(f.name)}</span>${icon('chevron')}</button>`).join(''):'<p class="muted small" style="padding:18px">没有子文件夹，可以直接选择当前文件夹。</p>';if(data.truncated)$('folder-caption').textContent='子文件夹较多，仅显示前 500 个；可输入完整路径前往。';}catch(ex){if(ticket!==pickerVersion)return;$('folder-list').innerHTML=empty('无法打开文件夹',ex.message,'folder');}
 }
-function openPreview(index){previewMode='results';previewIndex=index;previewCompare=false;renderPreview();openOverlay('preview-overlay');}
+function openPreview(index){previewMode='results';previewIndex=index;renderPreview();openOverlay('preview-overlay');}
 function mediaHTML(row,path){return row['类型']==='video'?`<video controls playsinline src="/media/video?path=${encodeURIComponent(path)}"></video>`:`<img src="/media/photo?path=${encodeURIComponent(path)}" alt="照片预览">`;}
 function previewRows(){return previewMode==='pairs'?pairFiltered:filtered;}
 function renderPreview(){
- const collection=previewRows();const r=collection[previewIndex];if(!r)return;const label=labelInfo(r);$('preview-title').textContent=previewCompare?'对比照片':'照片预览';
- $('preview-position').textContent=`${previewIndex+1} / ${collection.length}`;$('preview-select').checked=(previewMode==='pairs'?pairSelected:selected).has(r['__abs']);$('preview-select').disabled=previewMode==='pairs'&&!r['__can_delete'];
- const best=r['__abs_best'];
- $('preview-media').innerHTML=previewCompare&&best?`<figure><figcaption>当前照片</figcaption>${mediaHTML(r,r['__abs'])}</figure><figure><figcaption>建议保留</figcaption>${mediaHTML({...r,'类型':/\.(mp4|mov|mkv|avi)$/i.test(best)?'video':'photo'},best)}</figure>`:mediaHTML(r,r['__abs']);
+ const collection=previewRows();const r=collection[previewIndex];if(!r)return;const label=labelInfo(r),best=r['__abs_best'],comparing=previewMode==='results'&&previewCompare&&best;$('preview-title').textContent=comparing?'对比照片':'照片预览';
+ $('preview-position').textContent=`${previewIndex+1} / ${collection.length}`;$('preview-select').checked=(previewMode==='pairs'?pairSelected:selected).has(r['__abs']);$('preview-select').disabled=previewMode==='pairs'?!r['__can_delete']:!photoSelectable(r);
+ $('preview-media').innerHTML=comparing?`<figure><figcaption>当前照片</figcaption>${mediaHTML(r,r['__abs'])}</figure><figure><figcaption>建议保留</figcaption>${mediaHTML({...r,'类型':/\.(mp4|mov|mkv|avi)$/i.test(best)?'video':'photo'},best)}</figure>`:mediaHTML(r,r['__abs']);
  const fields=[['拍摄时间',dateText(r['拍摄时间'],true)],['拍摄地点',[r['VLM城市']||r['城市(GPS)'],r['地名']].filter(Boolean).join(' · ')],['景点',r['VLM景点']],['照片内容',r['VLM场景']],['配对检查',r['被删的一半']?'已删除：'+r['被删的一半']:''],['提示',r['失败环节']]];
  const detail=Object.entries(r).filter(([k,v])=>!k.startsWith('__')&&v!==''&&v!=null).map(([k,v])=>`<dl class="info-item"><dt>${esc(k)}</dt><dd>${esc(k==='建议标签'?label[0]:v)}</dd></dl>`).join('');
  $('preview-info').innerHTML=`<h3>${esc(basename(r['相对路径']))}</h3><span class="pill ${label[1]}">${esc(label[0])}</span>${fields.filter(([,v])=>v).map(([k,v])=>`<dl class="info-item"><dt>${k}</dt><dd>${esc(v)}</dd></dl>`).join('')}${best?`<button class="secondary" id="compare-button">${previewCompare?'返回单张预览':'对比建议保留的照片'}</button>`:''}<details><summary>文件详情</summary>${detail}</details>`;
  $('preview-media').querySelectorAll('video').forEach(video=>video.addEventListener('error',()=>{const wrap=document.createElement('div');wrap.style.textAlign='center';wrap.innerHTML=`<img src="/media/frame?path=${encodeURIComponent(r['__abs'])}" alt="视频画面"><p class="muted small" style="margin-top:10px">浏览器暂不支持此视频格式</p><button class="secondary" id="transcode-video" style="margin-top:12px">转换后播放</button>`;video.replaceWith(wrap);wrap.querySelector('button').onclick=()=>{wrap.innerHTML=`<video controls autoplay src="/media/transcode?path=${encodeURIComponent(r['__abs'])}"></video>`;};}));
  $('preview-media').querySelectorAll('img').forEach(img=>img.addEventListener('error',()=>{const note=document.createElement('p');note.textContent='暂时无法预览，请检查文件是否仍然存在。';note.className='muted small';img.replaceWith(note);}));
 }
-function navigatePreview(delta){const collection=previewRows();if(!collection.length)return;previewIndex=(previewIndex+delta+collection.length)%collection.length;previewCompare=false;renderPreview();}
+function navigatePreview(delta){const collection=previewRows();if(!collection.length)return;previewIndex=(previewIndex+delta+collection.length)%collection.length;renderPreview();}
 document.addEventListener('click',async event=>{
  const target=event.target.closest('button,[data-close]');if(!target)return;
  try{
@@ -204,7 +210,7 @@ document.addEventListener('click',async event=>{
    case 'delete-button':await deleteSelected();break;
    case 'preview-prev':navigatePreview(-1);break;
    case 'preview-next':navigatePreview(1);break;
-   case 'compare-button':previewCompare=!previewCompare;renderPreview();break;
+   case 'compare-button':previewCompare=!previewCompare;try{localStorage.setItem('light-album-compare',previewCompare?'1':'0');}catch{}renderPreview();break;
    case 'preview-original':{const r=previewRows()[previewIndex];if(r)window.open(`/media/${r['类型']==='video'?'video':'photo'}?path=${encodeURIComponent(r['__abs'])}`,'_blank','noopener');break;}
   }
  }catch(ex){toast(ex.message,true);}
@@ -212,9 +218,9 @@ document.addEventListener('click',async event=>{
 document.addEventListener('change',event=>{
  const el=event.target;
  if(el.name==='feature'||el.id==='vlm-scope')updateMode(el.name==='feature'?el.value:'');
- if(el.dataset.check!==undefined){const r=filtered[Number(el.dataset.check)];if(r){el.checked?selected.add(r['__abs']):selected.delete(r['__abs']);renderPhotos();}}
- if(el.id==='select-page'){filtered.slice(page*pageSize,(page+1)*pageSize).forEach(r=>el.checked?selected.add(r['__abs']):selected.delete(r['__abs']));renderPhotos();}
- if(el.id==='preview-select'){const r=previewRows()[previewIndex];if(r){const chosen=previewMode==='pairs'?pairSelected:selected;if(previewMode==='pairs'&&!r['__can_delete'])return;el.checked?chosen.add(r['__abs']):chosen.delete(r['__abs']);previewMode==='pairs'?renderPairResults():renderPhotos();}}
+ if(el.dataset.check!==undefined){const r=filtered[Number(el.dataset.check)];if(r&&photoSelectable(r)){el.checked?selected.add(r['__abs']):selected.delete(r['__abs']);renderPhotos();}}
+ if(el.id==='select-page'){filtered.slice(page*pageSize,(page+1)*pageSize).filter(photoSelectable).forEach(r=>el.checked?selected.add(r['__abs']):selected.delete(r['__abs']));renderPhotos();}
+ if(el.id==='preview-select'){const r=previewRows()[previewIndex];if(r){const chosen=previewMode==='pairs'?pairSelected:selected;if(previewMode==='pairs'?!r['__can_delete']:!photoSelectable(r))return;el.checked?chosen.add(r['__abs']):chosen.delete(r['__abs']);previewMode==='pairs'?renderPairResults():renderPhotos();}}
  if(el.id==='sel-job'){currentJob=el.value;category='all';closeOverlay('preview-overlay');loadResults();}
  if(el.id==='sort-order'){page=0;applyFilter();}
 });

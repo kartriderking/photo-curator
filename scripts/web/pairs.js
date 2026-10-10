@@ -74,7 +74,7 @@ document.addEventListener('click',async event=>{
  const target=event.target.closest('button');if(!target)return;
  if(target.dataset.pairFilter){pairFilter=target.dataset.pairFilter;pairPage=0;renderPairResults();return;}
  if(target.dataset.pairPage){pairPage+=Number(target.dataset.pairPage);renderPairResults();return;}
- if(target.dataset.pairPreview!==undefined){previewMode='pairs';previewIndex=Number(target.dataset.pairPreview);previewCompare=false;renderPreview();openOverlay('preview-overlay');return;}
+ if(target.dataset.pairPreview!==undefined){previewMode='pairs';previewIndex=Number(target.dataset.pairPreview);renderPreview();openOverlay('preview-overlay');return;}
  try{switch(target.id){
   case 'choose-pair-folder':pickerTarget='pair-dir';$('folder-title').textContent='选择要检查的文件夹';openOverlay('folder-overlay');await browseFolder($('pair-dir').value.trim());break;
   case 'start-pair-scan':await startPairScan();break;
