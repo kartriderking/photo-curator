@@ -60,7 +60,7 @@
     <div class="setup-divider"></div>
     <h2 class="section-title"><span class="step-number">2</span>这次想怎么整理？</h2>
     <div class="mode-grid" id="mode-grid">
-      <button class="mode-card active" data-mode="quick" aria-pressed="true"><span class="mode-select">✓</span><div class="mode-icon"><svg class="icon"><use href="#i-stack"/></svg></div><div class="mode-title">清理重复和模糊<span class="pill blue">推荐</span></div><p>找出重复与模糊照片，<br>为值得留下的回忆腾出空间。</p></button>
+      <button class="mode-card active" data-mode="quick" aria-pressed="true"><span class="mode-select">✓</span><div class="mode-icon"><svg class="icon"><use href="#i-stack"/></svg></div><div class="mode-title">清理相似和模糊<span class="pill blue">推荐</span></div><p>找出重复、相似与模糊照片，<br>为值得留下的回忆腾出空间。</p></button>
       <button class="mode-card" data-mode="travel" aria-pressed="false"><span class="mode-select"></span><div class="mode-icon"><svg class="icon"><use href="#i-pin"/></svg></div><div class="mode-title">按时间和地点整理</div><p>读取拍摄时间与位置，<br>让散落的旅行照片更有条理。</p></button>
       <button class="mode-card" data-mode="content" aria-pressed="false"><span class="mode-select"></span><div class="mode-icon"><svg class="icon"><use href="#i-sparkle"/></svg></div><div class="mode-title">识别照片内容<span class="pill amber">较慢</span></div><p>识别风景、美食和知名景点，<br>更容易找回你想要的照片。</p></button>
     </div>
@@ -68,23 +68,23 @@
     <details class="advanced" id="advanced"><summary><svg class="icon"><use href="#i-chevron"/></svg>自定义功能与高级设置<span id="custom-indicator"></span></summary>
       <div class="advanced-inner">
         <div class="feature-grid" id="feature-options">
-          <label class="feature-option"><input type="checkbox" name="feature" value="phash" checked>查找重复照片</label>
+          <label class="feature-option"><input type="checkbox" name="feature" value="phash" checked>查找相似照片</label>
           <label class="feature-option"><input type="checkbox" name="feature" value="quality" checked>筛选模糊照片</label>
           <label class="feature-option"><input type="checkbox" name="feature" value="gps">读取拍摄时间和 GPS</label>
           <label class="feature-option"><input type="checkbox" name="feature" value="places">查找城市和地名</label>
           <label class="feature-option"><input type="checkbox" name="feature" value="trips">按拍摄时间分组</label>
           <label class="feature-option"><input type="checkbox" name="feature" value="classify">识别照片类别</label>
-          <label class="feature-option"><input type="checkbox" name="feature" value="similar">查找近似照片</label>
           <label class="feature-option"><input type="checkbox" name="feature" value="landmarks">识别知名景点</label>
           <label class="feature-option"><input type="checkbox" name="feature" value="frames">仅提取视频画面</label>
         </div>
+        <div class="similar-options"><label class="check-label"><input type="checkbox" name="feature" value="similar" id="similar-ai">用 AI 扩大相似查找范围（较慢）</label><p class="muted small">默认快速查找，包含重复和外观近似的照片。AI 增强需要本地模型；两种方式的结果都显示在「相似照片」中，需预览确认。</p></div>
         <p class="muted small" id="dependency-note" style="margin-top:14px"></p>
         <div class="settings-grid">
           <label>城市查询方式<select id="geo-mode"><option value="offline">离线城市（拼音 / 英文）</option><option value="online">联网中文地名</option></select></label>
           <label>景点识别范围<select id="vlm-scope"><option value="scenic">仅风景候选照片</option><option value="no_gps">没有 GPS 的照片</option><option value="all">所有照片</option></select></label>
           <label>时间分组间隔（小时）<input type="number" id="trip-gap" min="0.1" step="0.1" value="36"></label>
-          <label>重复匹配距离（pHash）<input type="number" id="hamming" min="0" max="64" value="4"></label>
-          <label>近似匹配阈值（CLIP）<input type="number" id="similar-thr" min="0" max="1" step="0.01" value="0.95"></label>
+          <label>快速查找容差（pHash）<input type="number" id="hamming" min="0" max="64" value="4"></label>
+          <label>AI 相似匹配阈值<input type="number" id="similar-thr" min="0" max="1" step="0.01" value="0.95"></label>
           <label>风景候选阈值<input type="number" id="thr" min="0" max="1" step="0.05" value="0.35"></label>
           <label>景点识别模型<input id="vlm-model" value="qwen3-vl:8b"></label>
         </div>
@@ -106,7 +106,7 @@
   <div class="page-heading"><div><h1 id="result-heading">我的照片</h1><p id="result-description">先看看照片，再决定哪些值得留下。</p></div><button class="secondary" id="export-button"><svg class="icon"><use href="#i-download"/></svg>导出清单</button></div>
   <div class="result-toolbar"><div class="result-library"><svg class="icon muted"><use href="#i-folder"/></svg><select id="sel-job" aria-label="选择整理记录"><option value="">选择一个已整理的文件夹</option></select></div><div class="tools"><div class="search"><svg class="icon"><use href="#i-search"/></svg><input id="q" placeholder="搜索照片、城市或景点" aria-label="搜索照片"></div><button class="secondary" id="refresh-results" title="只刷新已有结果"><svg class="icon"><use href="#i-refresh"/></svg>刷新</button></div></div>
   <div class="result-tabs" id="result-tabs"></div>
-  <div class="result-hint" id="result-hint"><svg class="icon"><use href="#i-info"/></svg><span>整理建议仅供参考，点击照片可以放大查看。</span></div>
+  <div class="result-hint" id="result-hint"><svg class="icon"><use href="#i-info"/></svg><span>相似照片包含重复和近似候选。建议仅供参考，先放大或对比，再决定是否保留。</span></div>
   <div class="view-bar"><label class="check-label"><input type="checkbox" id="select-page">选中本页<span id="res-count"></span></label><div class="view-controls"><select id="sort-order" aria-label="照片排序"><option value="default">默认排序</option><option value="date-desc">最新拍摄在前</option><option value="date-asc">最早拍摄在前</option><option value="name">按文件名</option></select><div class="segmented"><button class="active" data-view="grid" title="缩略图" aria-label="缩略图视图"><svg class="icon"><use href="#i-grid"/></svg></button><button data-view="list" title="列表" aria-label="列表视图"><svg class="icon"><use href="#i-list"/></svg></button></div></div></div>
   <div id="photo-results"></div><div id="pager" class="pager"></div>
 </section>
