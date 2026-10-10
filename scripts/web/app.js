@@ -7,7 +7,7 @@ const presets={quick:['phash','quality'],travel:['gps','places','trips'],content
 const statusNames={queued:'等待整理',running:'正在整理',done:'已完成',partial:'部分完成',failed:'需要重试',cancelled:'已暂停'};
 const categoryNames={all:'全部',duplicates:'重复照片',similar:'近似照片',blurry:'模糊照片',documents:'截图与文档',travel:'旅行照片'};
 let jobs=[], currentPage='home', currentJob='', mode='quick', rows=[], filtered=[], category='all', view='grid', page=0;
-let resultsKind='results', requestVersion=0, jobsBusy=false, toastTimer, pickerCurrent='', pickerParent=null, pickerVersion=0, previewIndex=-1, previewCompare=false, previousFocus=null, renderedJobsKey='', selectOptionsKey='';
+let requestVersion=0, jobsBusy=false, toastTimer, pickerCurrent='', pickerParent=null, pickerVersion=0, pickerTarget='dir', previewMode='results', previewIndex=-1, previewCompare=false, previousFocus=null, renderedJobsKey='', selectOptionsKey='';
 const selected=new Set(), pageSize=48;
 
 async function api(path,body){
@@ -34,20 +34,12 @@ function updateMode(){
 }
 function showPage(next,load=true){
  currentPage=next;
- ['home','history','results'].forEach(p=>$('page-'+p).classList.toggle('hidden',p!==(next==='pairs'?'results':next)));
+ ['home','history','results','pairs'].forEach(p=>$('page-'+p).classList.toggle('hidden',p!==next));
  document.querySelectorAll('.nav-button').forEach(el=>el.classList.toggle('active',el.dataset.page===next));
- $('page-location').textContent={home:'开始整理',results:'我的照片',history:'整理记录',pairs:'检查配对文件'}[next];
- $('selection-bar').classList.toggle('hidden',!(next==='results'||next==='pairs')||!selected.size);
- if(next==='results'||next==='pairs'){
-  const kind=next==='pairs'?'pairs':'results';
-  const changed=kind!==resultsKind;resultsKind=kind;
-  $('result-heading').textContent=next==='pairs'?'检查配对文件':'我的照片';
-  $('result-description').textContent=next==='pairs'?'有些照片与视频原本是一对，看看是否只留下了其中一个。':'先看看照片，再决定哪些值得留下。';
-  $('export-button').classList.toggle('hidden',next==='pairs');
-  $('result-tabs').classList.toggle('hidden',next==='pairs');
-  $('result-hint').querySelector('span').textContent=next==='pairs'?'这里显示曾删除一半后剩下的配对文件。先预览，再决定是否保留。':'整理建议仅供参考，点击照片可以放大查看。';
-  syncJobSelect();if(load&&(changed||!rows.length))loadResults();
- }
+ $('page-location').textContent={home:'开始整理',results:'我的照片',history:'整理记录',pairs:'检查实况照片'}[next];
+ $('selection-bar').classList.toggle('hidden',next!=='results'||!selected.size);
+ if(next==='results'){syncJobSelect();if(load&&!rows.length)loadResults();}
+ if(next==='pairs'&&load)loadPairState();
  window.scrollTo({top:0,behavior:'smooth'});
 }
 function empty(title,description,kind='photo'){return `<div class="empty"><div class="empty-icon">${icon(kind)}</div><h3>${esc(title)}</h3><p>${esc(description)}</p></div>`;}
@@ -76,7 +68,7 @@ async function loadJobs(){
   $('recent-folders').innerHTML=roots.length?'<span class="muted small">最近使用：</span>'+roots.map(p=>`<button class="folder-chip" data-folder="${esc(p)}" title="${esc(p)}">${esc(basename(p))}</button>`).join(''):'<span class="muted small">支持电脑、移动硬盘里的照片文件夹</span>';
   renderedJobsKey=jobsKey;
   }
-  renderActivity(data);if(currentPage==='results'||currentPage==='pairs')syncJobSelect();
+  renderActivity(data);if(currentPage==='results')syncJobSelect();
  }catch(ex){$('activity').classList.remove('hidden');$('activity-title').textContent='暂时无法连接工作台';$('activity-detail').textContent='请确认本地服务已启动，稍后会自动重试。';}finally{jobsBusy=false;}
 }
 function renderActivity(data){
@@ -113,13 +105,14 @@ async function loadResults(refresh=false){
  if(!id){rows=[];filtered=[];$('photo-results').innerHTML=empty('还没有照片结果','先选择一个文件夹开始整理。');$('res-count').textContent='';return;}
  currentJob=id;try{localStorage.setItem('light-album-job',id);}catch{}
  try{
-  const data=await api(resultsKind==='pairs'?`/api/orphans?job_id=${id}`:`/api/jobs/${id}/results?refresh=${refresh?1:0}`);
+  const data=await api(`/api/jobs/${id}/results?refresh=${refresh?1:0}`);
   if(ticket!==requestVersion)return;rows=data.rows||[];page=0;applyFilter();
   if(refresh)toast('已刷新已有结果');
  }catch(ex){if(ticket!==requestVersion)return;rows=[];filtered=[];$('photo-results').innerHTML=empty('暂时无法读取照片',ex.message);$('res-count').textContent='';toast(ex.message,true);}
 }
 function matches(row,type){const label=String(row['建议标签']||'');return type==='all'||({duplicates:label==='可删-重复',similar:/相似/.test(label),blurry:label==='可删-模糊',documents:/截图|文档/.test(label),travel:['景点','旅行素材'].includes(label)})[type];}
 function labelInfo(row){
+ if(row['配对状态'])return [row['建议标签'],row['配对状态'].startsWith('missing_')?'amber':''];
  const l=String(row['建议标签']||'');
  if(l==='可删-重复')return ['重复照片','amber'];if(/相似/.test(l))return ['近似照片，待确认','amber'];if(l==='可删-模糊')return ['可能模糊','amber'];if(/截图|文档/.test(l))return ['截图 / 文档',''];
  if(l==='景点')return [row['VLM景点']||'景点照片','blue'];if(l==='旅行素材')return ['旅行照片','blue'];
@@ -130,7 +123,7 @@ function renderCategories(){
  $('result-tabs').innerHTML=Object.entries(categoryNames).map(([k,n])=>`<button class="result-tab ${k===category?'active':''}" data-category="${k}">${n}<span>${rows.filter(r=>matches(r,k)).length}</span></button>`).join('');
 }
 function applyFilter(){
- const q=$('q').value.trim().toLowerCase();filtered=rows.filter(r=>(resultsKind==='pairs'||matches(r,category))&&(!q||['相对路径','VLM景点','VLM城市','城市(GPS)','地名','VLM场景','拍摄时间'].some(k=>String(r[k]||'').toLowerCase().includes(q))));
+ const q=$('q').value.trim().toLowerCase();filtered=rows.filter(r=>matches(r,category)&&(!q||['相对路径','VLM景点','VLM城市','城市(GPS)','地名','VLM场景','拍摄时间'].some(k=>String(r[k]||'').toLowerCase().includes(q))));
  const order=$('sort-order').value;if(order==='name')filtered.sort((a,b)=>String(a['相对路径']).localeCompare(String(b['相对路径']),'zh'));
  if(order.startsWith('date'))filtered.sort((a,b)=>{const x=String(a['拍摄时间']||''),y=String(b['拍摄时间']||'');if(!x)return 1;if(!y)return -1;return x.localeCompare(y)*(order==='date-desc'?-1:1);});
  renderCategories();renderPhotos();
@@ -143,16 +136,16 @@ function renderPhotos(){
   if(view==='list')return `<tr class="${checked?'selected':''}"><td><input type="checkbox" data-check="${index}" aria-label="选择 ${esc(basename(r['相对路径']))}" ${checked?'checked':''}></td><td><div class="list-file">${thumbnail(r)}<button data-preview="${index}">${esc(basename(r['相对路径']))}</button></div></td><td>${esc(dateText(r['拍摄时间']))||'—'}</td><td>${esc(location)||'—'}</td><td><span class="pill ${label[1]}">${esc(label[0])}</span></td><td><button class="link-button" data-preview="${index}">查看</button></td></tr>`;
   return `<article class="photo-card ${checked?'selected':''}" data-card="${index}"><label class="photo-checkbox"><input type="checkbox" data-check="${index}" aria-label="选择 ${esc(basename(r['相对路径']))}" ${checked?'checked':''}></label>${r['类型']==='video'?'<span class="photo-type">'+icon('play')+'视频</span>':''}<button class="photo-image" data-preview="${index}" aria-label="预览 ${esc(basename(r['相对路径']))}">${thumbnail(r)}</button><div class="photo-info"><div class="photo-name" title="${esc(r['相对路径'])}">${esc(basename(r['相对路径']))}</div><span class="pill ${label[1]}">${esc(label[0])}</span><div class="photo-meta">${esc(meta)}</div></div></article>`;
  }).join('');
- $('photo-results').innerHTML=visible.length?(view==='list'?'<div class="list-scroll"><table class="list-view"><thead><tr><th style="width:44px"></th><th>照片</th><th>拍摄时间</th><th>地点</th><th>整理建议</th><th></th></tr></thead><tbody>'+content+'</tbody></table></div>':'<div class="photo-grid">'+content+'</div>'):empty(rows.length?'没有找到符合条件的照片':resultsKind==='pairs'?'没有需要检查的配对文件':'还没有可查看的照片',rows.length?'换个关键词或分类试试。':resultsKind==='pairs'?'暂未发现只删除了一半的照片与视频。':'整理进行中时，可以稍后点击刷新查看结果。');
- $('res-count').textContent=` · ${filtered.length} ${resultsKind==='pairs'?'个文件':'项'}`;
+ $('photo-results').innerHTML=visible.length?(view==='list'?'<div class="list-scroll"><table class="list-view"><thead><tr><th style="width:44px"></th><th>照片</th><th>拍摄时间</th><th>地点</th><th>整理建议</th><th></th></tr></thead><tbody>'+content+'</tbody></table></div>':'<div class="photo-grid">'+content+'</div>'):empty(rows.length?'没有找到符合条件的照片':'还没有可查看的照片',rows.length?'换个关键词或分类试试。':'整理进行中时，可以稍后点击刷新查看结果。');
+ $('res-count').textContent=` · ${filtered.length} 项`;
  $('pager').innerHTML=filtered.length>pageSize?`<button data-page-turn="-1" ${page===0?'disabled':''}>上一页</button><span>${page+1} / ${count}</span><button data-page-turn="1" ${page===count-1?'disabled':''}>下一页</button>`:'';
  $('select-page').checked=!!visible.length&&visible.every(r=>selected.has(r['__abs']));$('select-page').indeterminate=visible.some(r=>selected.has(r['__abs']))&&!$('select-page').checked;$('select-page').disabled=!visible.length;
  $('photo-results').querySelectorAll('img').forEach(img=>img.addEventListener('error',()=>{const fallback=document.createElement('span');fallback.innerHTML=icon('photo');img.replaceWith(fallback);}));
  updateSelection();
 }
 function updateSelection(){
- $('selection-bar').classList.toggle('hidden',!selected.size||!['results','pairs'].includes(currentPage));$('selection-count').textContent=`已选择 ${selected.size} 项`;
- if(previewIndex>=0&&filtered[previewIndex])$('preview-select').checked=selected.has(filtered[previewIndex]['__abs']);
+ $('selection-bar').classList.toggle('hidden',!selected.size||currentPage!=='results');$('selection-count').textContent=`已选择 ${selected.size} 项`;
+ if(previewMode==='results'&&previewIndex>=0&&filtered[previewIndex])$('preview-select').checked=selected.has(filtered[previewIndex]['__abs']);
 }
 async function deleteSelected(){
  if(!selected.size)return;const paths=[...selected];
@@ -164,13 +157,14 @@ function openOverlay(id){previousFocus=document.activeElement;$(id).classList.re
 function closeOverlay(id){$(id).classList.add('hidden');if(id==='preview-overlay'){$('preview-media').innerHTML='';previewIndex=-1;}document.body.style.overflow='';if(previousFocus?.isConnected)previousFocus.focus();}
 async function browseFolder(path=''){
  const ticket=++pickerVersion;pickerCurrent='';$('folder-confirm').disabled=true;$('folder-list').innerHTML='<p class="muted small" style="padding:18px">正在读取文件夹…</p>';
- try{const data=await api('/api/folders?path='+encodeURIComponent(path));if(ticket!==pickerVersion)return;pickerCurrent=data.path;pickerParent=data.parent;$('folder-path').value=data.path;$('folder-up').disabled=data.parent===null;$('folder-confirm').disabled=!data.path;$('folder-caption').textContent=data.path?'将整理此文件夹及其子文件夹中的照片。':'选择一个磁盘，进入照片所在的文件夹。';$('folder-list').innerHTML=data.folders.length?data.folders.map(f=>`<button class="picker-folder" data-browse="${esc(f.path)}">${icon('folder')}<span>${esc(f.name)}</span>${icon('chevron')}</button>`).join(''):'<p class="muted small" style="padding:18px">没有子文件夹，可以直接选择当前文件夹。</p>';if(data.truncated)$('folder-caption').textContent='子文件夹较多，仅显示前 500 个；可输入完整路径前往。';}catch(ex){if(ticket!==pickerVersion)return;$('folder-list').innerHTML=empty('无法打开文件夹',ex.message,'folder');}
+ try{const data=await api('/api/folders?path='+encodeURIComponent(path));if(ticket!==pickerVersion)return;pickerCurrent=data.path;pickerParent=data.parent;$('folder-path').value=data.path;$('folder-up').disabled=data.parent===null;$('folder-confirm').disabled=!data.path;$('folder-caption').textContent=data.path?(pickerTarget==='pair-dir'?'选择当前文件夹检查实况 UUID 配对。':'将整理此文件夹及其子文件夹中的照片。'):'选择一个磁盘，进入照片所在的文件夹。';$('folder-list').innerHTML=data.folders.length?data.folders.map(f=>`<button class="picker-folder" data-browse="${esc(f.path)}">${icon('folder')}<span>${esc(f.name)}</span>${icon('chevron')}</button>`).join(''):'<p class="muted small" style="padding:18px">没有子文件夹，可以直接选择当前文件夹。</p>';if(data.truncated)$('folder-caption').textContent='子文件夹较多，仅显示前 500 个；可输入完整路径前往。';}catch(ex){if(ticket!==pickerVersion)return;$('folder-list').innerHTML=empty('无法打开文件夹',ex.message,'folder');}
 }
-function openPreview(index){previewIndex=index;previewCompare=false;renderPreview();openOverlay('preview-overlay');}
+function openPreview(index){previewMode='results';previewIndex=index;previewCompare=false;renderPreview();openOverlay('preview-overlay');}
 function mediaHTML(row,path){return row['类型']==='video'?`<video controls playsinline src="/media/video?path=${encodeURIComponent(path)}"></video>`:`<img src="/media/photo?path=${encodeURIComponent(path)}" alt="照片预览">`;}
+function previewRows(){return previewMode==='pairs'?pairFiltered:filtered;}
 function renderPreview(){
- const r=filtered[previewIndex];if(!r)return;const label=labelInfo(r);$('preview-title').textContent=previewCompare?'对比照片':'照片预览';
- $('preview-position').textContent=`${previewIndex+1} / ${filtered.length}`;$('preview-select').checked=selected.has(r['__abs']);
+ const collection=previewRows();const r=collection[previewIndex];if(!r)return;const label=labelInfo(r);$('preview-title').textContent=previewCompare?'对比照片':'照片预览';
+ $('preview-position').textContent=`${previewIndex+1} / ${collection.length}`;$('preview-select').checked=(previewMode==='pairs'?pairSelected:selected).has(r['__abs']);$('preview-select').disabled=previewMode==='pairs'&&!r['__can_delete'];
  const best=r['__abs_best'];
  $('preview-media').innerHTML=previewCompare&&best?`<figure><figcaption>当前照片</figcaption>${mediaHTML(r,r['__abs'])}</figure><figure><figcaption>建议保留</figcaption>${mediaHTML({...r,'类型':/\.(mp4|mov|mkv|avi)$/i.test(best)?'video':'photo'},best)}</figure>`:mediaHTML(r,r['__abs']);
  const fields=[['拍摄时间',dateText(r['拍摄时间'],true)],['拍摄地点',[r['VLM城市']||r['城市(GPS)'],r['地名']].filter(Boolean).join(' · ')],['景点',r['VLM景点']],['照片内容',r['VLM场景']],['配对检查',r['被删的一半']?'已删除：'+r['被删的一半']:''],['提示',r['失败环节']]];
@@ -179,7 +173,7 @@ function renderPreview(){
  $('preview-media').querySelectorAll('video').forEach(video=>video.addEventListener('error',()=>{const wrap=document.createElement('div');wrap.style.textAlign='center';wrap.innerHTML=`<img src="/media/frame?path=${encodeURIComponent(r['__abs'])}" alt="视频画面"><p class="muted small" style="margin-top:10px">浏览器暂不支持此视频格式</p><button class="secondary" id="transcode-video" style="margin-top:12px">转换后播放</button>`;video.replaceWith(wrap);wrap.querySelector('button').onclick=()=>{wrap.innerHTML=`<video controls autoplay src="/media/transcode?path=${encodeURIComponent(r['__abs'])}"></video>`;};}));
  $('preview-media').querySelectorAll('img').forEach(img=>img.addEventListener('error',()=>{const note=document.createElement('p');note.textContent='暂时无法预览，请检查文件是否仍然存在。';note.className='muted small';img.replaceWith(note);}));
 }
-function navigatePreview(delta){if(!filtered.length)return;previewIndex=(previewIndex+delta+filtered.length)%filtered.length;previewCompare=false;renderPreview();}
+function navigatePreview(delta){const collection=previewRows();if(!collection.length)return;previewIndex=(previewIndex+delta+collection.length)%collection.length;previewCompare=false;renderPreview();}
 document.addEventListener('click',async event=>{
  const target=event.target.closest('button,[data-close]');if(!target)return;
  try{
@@ -194,10 +188,10 @@ document.addEventListener('click',async event=>{
   if(target.dataset.browse!==undefined){await browseFolder(target.dataset.browse);return;}
   if(target.dataset.close){closeOverlay(target.dataset.close);return;}
   switch(target.id){
-   case 'choose-folder':openOverlay('folder-overlay');await browseFolder($('dir').value.trim());break;
+   case 'choose-folder':pickerTarget='dir';$('folder-title').textContent='选择照片文件夹';openOverlay('folder-overlay');await browseFolder($('dir').value.trim());break;
    case 'folder-up':await browseFolder(pickerParent||'');break;
    case 'folder-go':await browseFolder($('folder-path').value.trim());break;
-   case 'folder-confirm':if(pickerCurrent){$('dir').value=pickerCurrent;closeOverlay('folder-overlay');}break;
+   case 'folder-confirm':if(pickerCurrent){if(pickerTarget==='pair-dir')setPairFolder(pickerCurrent);else $('dir').value=pickerCurrent;closeOverlay('folder-overlay');}break;
    case 'start-button':await startJob();break;
    case 'activity-results':await viewJob(target.dataset.id);break;
    case 'refresh-results':await loadResults(true);break;
@@ -207,7 +201,7 @@ document.addEventListener('click',async event=>{
    case 'preview-prev':navigatePreview(-1);break;
    case 'preview-next':navigatePreview(1);break;
    case 'compare-button':previewCompare=!previewCompare;renderPreview();break;
-   case 'preview-original':{const r=filtered[previewIndex];if(r)window.open(`/media/${r['类型']==='video'?'video':'photo'}?path=${encodeURIComponent(r['__abs'])}`,'_blank','noopener');break;}
+   case 'preview-original':{const r=previewRows()[previewIndex];if(r)window.open(`/media/${r['类型']==='video'?'video':'photo'}?path=${encodeURIComponent(r['__abs'])}`,'_blank','noopener');break;}
   }
  }catch(ex){toast(ex.message,true);}
 });
@@ -216,7 +210,7 @@ document.addEventListener('change',event=>{
  if(el.name==='feature'||el.id==='vlm-scope')updateMode();
  if(el.dataset.check!==undefined){const r=filtered[Number(el.dataset.check)];if(r){el.checked?selected.add(r['__abs']):selected.delete(r['__abs']);renderPhotos();}}
  if(el.id==='select-page'){filtered.slice(page*pageSize,(page+1)*pageSize).forEach(r=>el.checked?selected.add(r['__abs']):selected.delete(r['__abs']));renderPhotos();}
- if(el.id==='preview-select'){const r=filtered[previewIndex];if(r){el.checked?selected.add(r['__abs']):selected.delete(r['__abs']);renderPhotos();}}
+ if(el.id==='preview-select'){const r=previewRows()[previewIndex];if(r){const chosen=previewMode==='pairs'?pairSelected:selected;if(previewMode==='pairs'&&!r['__can_delete'])return;el.checked?chosen.add(r['__abs']):chosen.delete(r['__abs']);previewMode==='pairs'?renderPairResults():renderPhotos();}}
  if(el.id==='sel-job'){currentJob=el.value;category='all';closeOverlay('preview-overlay');loadResults();}
  if(el.id==='sort-order'){page=0;applyFilter();}
 });

@@ -35,12 +35,17 @@
 4. 「我的照片」查看缩略图、筛选、搜索、放大和对比建议保留项。
 5. 「刷新」只读取已有结果，不触发重新分析；「导出清单」下载 CSV。
 6. 「整理记录」可再次整理同一文件夹，或继续中断的任务。
+7. 「检查实况照片」独立选择文件夹，用 ExifTool 读取 UUID，检查 Apple Live Photo 是否缺少照片或视频，不需要先运行整理任务。
 
 默认不包含视频。仅视频 GPS 不抽帧；视频内容分析和独立抽帧才调用 FFmpeg。
 
 离线城市查询通常返回拼音或英文；联网中文地名需要在高级设置中选择，会把 GPS 坐标发送到 Nominatim。
 
 pHash 相近、CLIP 内容相似和模糊分数都只是整理建议。时间分组也不保证每一组都是旅行。程序不会自动删除原图；移入回收站前需要人工选择并确认。
+
+实况检查按照片 Apple MakerNotes 与视频 QuickTime Keys 中的 ContentIdentifier 配对，支持改名和不同子文件夹；不按文件名猜测配对。[Apple 关联标识说明](https://developer.apple.com/documentation/avfoundation/avcapturephotosettings/livephotomoviemetadata)、[ExifTool Apple 标签](https://exiftool.org/TagNames/Apple.html)、[ExifTool QuickTime 标签](https://exiftool.org/TagNames/QuickTime.html)。
+
+缺失配对表示当前扫描范围内没有另一半，对方也可能在未扫描的文件夹中；建议包含子文件夹。没有 UUID 的普通照片、标识冲突或元数据读取失败会单独显示，不能直接作为补删依据。移入回收站前会复核扫描范围的文件身份；内容发生变化时必须重新检查。读取过的 UUID 元数据按文件身份缓存到 SQLite。
 
 ## 命令行
 

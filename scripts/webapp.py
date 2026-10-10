@@ -13,6 +13,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from common import CACHE_DIR, OUTPUT_DIR, PROJECT_ROOT, IMAGE_EXTS, VIDEO_EXTS
 from feature_config import normalize_options
 from task_store import TaskStore
+from live_photos import LivePhotoStore, run_scan, enumerate_media
+from cache_db import canonical
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 JOBS_FILE = PROJECT_ROOT / "jobs.json"
@@ -25,6 +27,9 @@ app = FastAPI(title="photo-curator")
 _lock = threading.Lock()
 _proc = None          # 当前运行中的子进程
 _thread = None
+_pair_thread = None
+_pair_id = None
+_pair_cancel = None
 
 
 # ---------- 任务持久化与执行 ----------
@@ -110,6 +115,9 @@ def startup():
             for j in store.list_jobs():
                 if j['status'] == 'running':
                     store.update_job(j['id'], {'status': 'cancelled', 'interrupted': True})
+        with LivePhotoStore(path=DB_PATH) as store:
+            with store.conn:
+                store.conn.execute("UPDATE live_photo_scans SET status='cancelled' WHERE status IN ('queued','running')")
     _ensure_worker()
 
 
@@ -126,7 +134,7 @@ def health():
 
 @app.get('/assets/{name}')
 def frontend_asset(name: str):
-    if name not in {'app.js', 'style.css'}:
+    if name not in {'app.js', 'pairs.js', 'style.css'}:
         raise HTTPException(404, '文件不存在')
     return FileResponse(WEB_DIR / name, headers={'Cache-Control': 'no-store'})
 
@@ -306,68 +314,98 @@ def delete_files(body: dict):
 
 
 @app.get("/api/orphans")
-def orphans(job_id: str):
-    """从删除日志找 Live Photo/同名配对中"只删了一边"的情况，
-    返回幸存的另一半（含数据库中的标签信息），供用户预览后决定是否补删。"""
+def orphans(job_id: str = ''):
+    raise HTTPException(410, '请在检查实况照片页面直接选择文件夹，按 UUID 检查配对。')
+
+
+def _pair_worker(scan_id, stopped):
+    global _pair_thread, _pair_id, _pair_cancel
+    try:
+        run_scan(scan_id, DB_PATH, stopped)
+    finally:
+        with _lock:
+            _pair_thread = _pair_id = _pair_cancel = None
+
+
+@app.post('/api/live-photos/scans')
+def create_pair_scan(body: dict):
+    global _pair_thread, _pair_id, _pair_cancel
+    root = Path(str(body.get('input_dir', '')).strip().strip('"'))
+    if not body.get('input_dir') or not root.is_dir():
+        raise HTTPException(400, '请先选择一个存在的照片文件夹')
+    recursive = body.get('recursive', True)
+    if not isinstance(recursive, bool):
+        raise HTTPException(400, '包含子文件夹必须是布尔值')
     with _lock:
-        jobs = _load_jobs()
-    j = next((x for x in jobs["jobs"] if x["id"] == job_id), None)
-    if not j:
-        raise HTTPException(404, "任务不存在")
-    base = Path(j["input_dir"]).resolve()
+        if _pair_thread is not None and _pair_thread.is_alive():
+            raise HTTPException(409, '实况检查正在运行，请等待完成或点击停止检查')
+        with LivePhotoStore(path=DB_PATH) as store:
+            state = store.create_scan(root, recursive)
+        _pair_id = state['id']
+        _pair_cancel = threading.Event()
+        _pair_thread = threading.Thread(target=_pair_worker, args=(_pair_id, _pair_cancel), daemon=True)
+        _pair_thread.start()
+    return state
 
-    deleted, deleted_ts = [], {}
-    with TaskStore(path=DB_PATH) as store:
-        for p, ts in store.deletion_records():
+
+@app.get('/api/live-photos/scans/{scan_id}')
+def pair_scan_status(scan_id: str):
+    with LivePhotoStore(path=DB_PATH) as store:
+        state = store.scan(scan_id)
+        if state is None:
+            raise HTTPException(404, '这次检查记录不存在，请重新选择文件夹检查')
+        return {**state, 'rows': store.rows(scan_id)}
+
+
+@app.post('/api/live-photos/scans/{scan_id}/cancel')
+def cancel_pair_scan(scan_id: str):
+    with _lock:
+        with LivePhotoStore(path=DB_PATH) as store:
+            if store.scan(scan_id) is None:
+                raise HTTPException(404, '检查记录不存在')
+        if _pair_id == scan_id and _pair_cancel is not None:
+            _pair_cancel.set()
+    return {'ok': True}
+
+
+@app.post('/api/live-photos/scans/{scan_id}/delete')
+def delete_pair_files(scan_id: str, body: dict):
+    from send2trash import send2trash
+    paths = body.get('paths', [])
+    if not isinstance(paths, list) or len(paths) > 2000 or not all(isinstance(p, str) for p in paths):
+        raise HTTPException(400, '一次最多选择 2000 个文件')
+    with LivePhotoStore(path=DB_PATH) as store:
+        state = store.scan(scan_id)
+        if state is None:
+            raise HTTPException(404, '检查记录不存在')
+        if state['status'] != 'done' or state['summary'].get('error') or state['summary'].get('conflict'):
+            raise HTTPException(409, '检查未完整完成或有文件无法读取，请先处理问题并重新检查')
+        files = store.files(scan_id)
+        latest = enumerate_media(state['input_dir'], state['recursive'])
+        old = {(canonical(row['item']['path']), row['item']['version']) for row in files}
+        if old != {(canonical(i['path']), i['version']) for i in latest}:
+            state.update(status='stale', error='文件夹内容已变化，请重新检查后再选择。')
+            store.save_state(state)
+            raise HTTPException(409, state['error'])
+        allowed = {canonical(r['__abs']): r for r in store.rows(scan_id) if r['__can_delete']}
+        root = Path(state['input_dir']).resolve()
+        results, deleted = [], []
+        for path in dict.fromkeys(paths):
             try:
-                if Path(p).resolve().parent == base or base in Path(p).resolve().parents:
-                    deleted.append(p)
-                    deleted_ts[p] = ts
-            except OSError:
-                continue
-    media_exts = IMAGE_EXTS | VIDEO_EXTS
-    photo_exts = {".heic", ".jpg", ".jpeg", ".png", ".tif", ".tiff"}
-
-    # SQLite 中的标签/景点信息，按绝对路径索引
-    info_by_abs = {}
-    with TaskStore(path=DB_PATH) as store:
-        df = store.results(job_id).fillna('')
-        b = j["input_dir"].rstrip("\\/") + "\\"
-        for _, r in df.iterrows():
-            info_by_abs[(b + str(r.get("相对路径", "")).replace("/", "\\")).lower()] = r.to_dict()
-
-    orphans, seen = [], set()
-    checked_dirs = {}
-    for p in dict.fromkeys(deleted):   # 去重保序
-        f = Path(p)
-        if f.suffix.lower() not in media_exts:
-            continue
-        if f.exists():
-            continue   # 已从回收站还原：两边都在，不算孤儿
-        d = str(f.parent)
-        if d not in checked_dirs:
-            checked_dirs[d] = [q for q in f.parent.iterdir()] if f.parent.is_dir() else []
-        stem = f.stem.lower()
-        my_type = "video" if f.suffix.lower() in VIDEO_EXTS else "photo"
-        want_type = "photo" if my_type == "video" else "video"
-        partner = next((q for q in checked_dirs[d]
-                        if q.stem.lower() == stem and q != f
-                        and (q.suffix.lower() in photo_exts) == (want_type == "photo")
-                        and q.suffix.lower() in media_exts), None)
-        if partner is None:
-            continue   # 另一半也不在（两边都删了）→ 无可操作
-        pkey = str(partner.resolve())
-        if pkey in seen:
-            continue
-        seen.add(pkey)
-        info = info_by_abs.get(pkey.lower(), {})
-        row = {"相对路径": partner.name, "类型": want_type,
-               "建议标签": info.get("建议标签", ""), "城市(GPS)": info.get("城市(GPS)", ""),
-               "VLM景点": info.get("VLM景点", ""), "拍摄时间": info.get("拍摄时间", ""),
-               "被删的一半": f.name, "删除时间": deleted_ts.get(p, ""),
-               "__abs": pkey, "__abs_best": ""}
-        orphans.append(row)
-    return {"total": len(orphans), "rows": orphans}
+                f = Path(path).resolve()
+                if root not in f.parents or canonical(f) not in allowed or not f.is_file():
+                    results.append({'path': path, 'ok': False, 'msg': '不是此次 UUID 检查确认的缺失配对文件'})
+                    continue
+                send2trash(str(f))
+                deleted.append(str(f))
+                results.append({'path': path, 'ok': True})
+            except Exception as error:
+                results.append({'path': path, 'ok': False, 'msg': str(error)[:150]})
+        if deleted:
+            store.add_deletions(None, deleted)
+            state.update(status='stale', error='部分文件已移入回收站，请重新检查更新配对状态。')
+            store.save_state(state)
+    return {'deleted': len(deleted), 'results': results}
 
 
 @app.get("/api/labels")

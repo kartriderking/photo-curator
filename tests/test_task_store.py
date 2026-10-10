@@ -96,25 +96,6 @@ class TaskStoreTest(unittest.TestCase):
             self.assertTrue(first.get_job('sample')['cancel'])
             self.assertEqual(first.get_job('sample')['pid'], 123)
 
-    def test_pair_check_uses_database_deletion_audit_and_result_labels(self):
-        import webapp
-        library = self.root / 'library'
-        library.mkdir()
-        missing = library / 'live.jpg'
-        partner = library / 'live.mov'
-        partner.write_bytes(b'video fixture')
-        with TaskStore(path=self.db_path) as store:
-            store.update_job('sample', {'input_dir': str(library)})
-            store.save_results(self.task_dir, self.frame('live.mov', '旅行素材'), self.snapshot)
-            store.add_deletions('sample', [missing])
-        with patch.object(webapp, 'DB_PATH', self.db_path):
-            pairs = webapp.orphans('sample')
-            self.assertEqual(pairs['total'], 1)
-            self.assertEqual(pairs['rows'][0]['建议标签'], '旅行素材')
-            self.assertEqual(pairs['rows'][0]['__abs'], str(partner.resolve()))
-            missing.write_bytes(b'restored fixture')
-            self.assertEqual(webapp.orphans('sample')['total'], 0)
-
     def test_legacy_import_is_idempotent_and_preserves_newer_sqlite_records(self):
         d = self.root / 'legacy' / 'old'
         d.mkdir(parents=True)

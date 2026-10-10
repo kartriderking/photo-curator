@@ -5,6 +5,7 @@
 <title>轻相册 · 本地照片整理</title>
 <link rel="stylesheet" href="/assets/style.css">
 <script src="/assets/app.js" defer></script>
+<script src="/assets/pairs.js" defer></script>
 </head>
 <body>
 <svg aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden"><defs>
@@ -38,7 +39,7 @@
     <button class="nav-button" data-page="results"><svg class="icon"><use href="#i-photo"/></svg><span>我的照片</span></button>
     <button class="nav-button" data-page="history"><svg class="icon"><use href="#i-clock"/></svg><span>整理记录</span></button>
     <div class="nav-separator"></div>
-    <button class="nav-button" data-page="pairs"><svg class="icon"><use href="#i-stack"/></svg><span>检查配对文件</span></button>
+    <button class="nav-button" data-page="pairs"><svg class="icon"><use href="#i-stack"/></svg><span>检查实况照片</span></button>
   </nav>
   <div class="sidebar-bottom"><span class="small muted"><span class="local-dot"></span>本地工作台</span><p>照片留在你的电脑里</p></div>
 </aside>
@@ -108,6 +109,21 @@
   <div class="result-hint" id="result-hint"><svg class="icon"><use href="#i-info"/></svg><span>整理建议仅供参考，点击照片可以放大查看。</span></div>
   <div class="view-bar"><label class="check-label"><input type="checkbox" id="select-page">选中本页<span id="res-count"></span></label><div class="view-controls"><select id="sort-order" aria-label="照片排序"><option value="default">默认排序</option><option value="date-desc">最新拍摄在前</option><option value="date-asc">最早拍摄在前</option><option value="name">按文件名</option></select><div class="segmented"><button class="active" data-view="grid" title="缩略图" aria-label="缩略图视图"><svg class="icon"><use href="#i-grid"/></svg></button><button data-view="list" title="列表" aria-label="列表视图"><svg class="icon"><use href="#i-list"/></svg></button></div></div></div>
   <div id="photo-results"></div><div id="pager" class="pager"></div>
+</section>
+<section id="page-pairs" class="hidden">
+  <div class="page-heading"><div><h1>检查实况照片</h1><p>直接选择文件夹，按实况 UUID 查找缺失的照片或视频。</p></div></div>
+  <div class="card setup-card">
+    <h2 class="section-title"><svg class="icon"><use href="#i-folder"/></svg>选择要检查的文件夹</h2>
+    <div class="folder-line"><div class="folder-input-wrap"><svg class="icon"><use href="#i-folder"/></svg><input id="pair-dir" aria-label="实况照片文件夹路径" placeholder="粘贴文件夹路径，或点击右侧选择" autocomplete="off"></div><button class="secondary" id="choose-pair-folder">选择文件夹</button></div>
+    <div class="start-line"><label class="check-label"><input type="checkbox" id="pair-recursive" checked>包含子文件夹</label><div class="tools"><button class="secondary hidden" id="cancel-pair-scan">停止检查</button><button class="primary" id="start-pair-scan">开始检查</button></div></div>
+    <p class="muted small pair-explanation">照片和视频按 UUID 配对，文件名不同也能识别。检查只读取元数据，无需先整理照片。</p>
+    <div id="pair-progress" class="hidden"><p id="pair-progress-text" class="muted small"></p><div class="progress-track"><i id="pair-progress-bar"></i></div></div>
+  </div>
+  <div id="pair-summary" class="pair-summary hidden"></div>
+  <div id="pair-warning" class="result-hint hidden" role="status"></div>
+  <div class="result-tabs" id="pair-tabs"></div>
+  <div class="pair-result-tools hidden" id="pair-result-tools"><label class="check-label"><input type="checkbox" id="pair-select-page">选中本页<span id="pair-selection-count"></span></label><div class="tools"><div class="search"><svg class="icon"><use href="#i-search"/></svg><input id="pair-search" placeholder="搜索文件名或 UUID" aria-label="搜索实况检查结果"></div><button class="danger" id="delete-pair-files" disabled>移入回收站</button></div></div>
+  <div id="pair-results"></div><div id="pair-pager" class="pager"></div>
 </section>
 </main>
 </div>
