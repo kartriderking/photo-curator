@@ -2,10 +2,10 @@
 const $=id=>document.getElementById(id);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const icon=name=>`<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
-const names={gps:'读取拍摄信息',places:'查找城市和地名',phash:'查找相似照片（快速）',quality:'筛选模糊照片',similar:'AI 增强相似查找',classify:'识别照片类别',landmarks:'识别知名景点',trips:'按时间分组',frames:'提取视频画面'};
-const presets={quick:['phash','quality'],travel:['gps','places','trips'],content:['classify','landmarks']};
+const names={gps:'读取拍摄信息',places:'查找城市和地名',phash:'查找相似照片（快速）',quality:'筛选模糊照片',similar:'AI 增强相似查找',classify:'识别照片类别',landmarks:'深度识别内容和景点',trips:'按时间分组',frames:'提取视频画面'};
+const clipNames={screenshot:'截图',document:'文档',food:'美食',selfie:'自拍',people:'人物',scenic:'风景',city:'城市建筑',interior:'室内',animal:'动物',plant:'植物',night:'夜景',meme:'表情图片',vehicle:'交通工具',blurry:'模糊随拍',daily:'日常'};
 const statusNames={queued:'等待整理',running:'正在整理',done:'已完成',partial:'部分完成',failed:'需要重试',cancelled:'已暂停'};
-const categoryNames={all:'全部',similar:'相似照片',blurry:'模糊照片',documents:'截图与文档',travel:'旅行照片'};
+const categoryNames={all:'全部',similar:'相似照片',blurry:'模糊照片',documents:'截图与文档',travel:'旅行照片',content:'内容识别'};
 let jobs=[], currentPage='home', currentJob='', mode='quick', rows=[], filtered=[], category='all', view='grid', page=0;
 let requestVersion=0, jobsBusy=false, toastTimer, pickerCurrent='', pickerParent=null, pickerVersion=0, pickerTarget='dir', previewMode='results', previewIndex=-1, previewCompare=false, previousFocus=null, renderedJobsKey='', selectOptionsKey='';
 const selected=new Set(), pageSize=48;
@@ -24,21 +24,21 @@ async function api(path,body){
 function toast(message,error=false){clearTimeout(toastTimer);$('toast').textContent=message;$('toast').classList.toggle('error',error);$('toast').classList.remove('hidden');toastTimer=setTimeout(()=>$('toast').classList.add('hidden'),error?6500:3200);}
 function basename(path){return String(path||'').replace(/[\\/]+$/,'').split(/[\\/]/).pop()||path;}
 function dateText(value,withTime=false){if(!value||String(value)==='NaT')return '';const s=String(value).replace('T',' ');return s.slice(0,withTime?16:10).replace(/-/g,'/');}
-function features(){return [...document.querySelectorAll('[name="feature"]:checked')].map(x=>x.value);}
-function applyMode(next){mode=next;document.querySelectorAll('[name="feature"]').forEach(x=>x.checked=presets[next].includes(x.value));$('force').checked=false;updateMode();}
-function updateMode(changedFeature=''){
- const quick=document.querySelector('[name="feature"][value="phash"]'),ai=$('similar-ai');
- if(changedFeature==='phash'&&!quick.checked)ai.checked=false;
- if(ai.checked)quick.checked=true;
- ai.disabled=!quick.checked;$('similar-thr').disabled=!ai.checked;$('hamming').disabled=!quick.checked;
- const f=features();mode=Object.keys(presets).find(m=>presets[m].length===f.length&&presets[m].every(k=>f.includes(k)))||'custom';
+function contentLevel(){return document.querySelector('[name="content-level"]:checked').value;}
+function features(){
+ if(mode==='travel')return ['gps','places','trips'];
+ if(mode==='content')return ['classify','similar',...(contentLevel()==='deep'?['landmarks']:[])];
+ return ['phash','quality',...($('similar-ai').checked?['similar','classify']:[])];
+}
+function applyMode(next){mode=next;updateMode();}
+function updateMode(){
+ const deep=mode==='content'&&contentLevel()==='deep';
  document.querySelectorAll('[data-mode]').forEach(el=>{const chosen=el.dataset.mode===mode;el.classList.toggle('active',chosen);el.setAttribute('aria-pressed',chosen);el.querySelector('.mode-select').textContent=chosen?'✓':'';});
- $('custom-indicator').textContent=mode==='custom'?' · 已自定义':'';
- $('mode-caption').textContent=f.some(k=>['classify','similar','landmarks'].includes(k))?(f.includes('landmarks')?'需要本地识别服务，处理时间较长':f.includes('similar')?'已启用 AI 增强相似查找，处理较慢':'照片内容将在本机分析'):'本机快速处理，适合日常整理';
- const need=[];const scope=$('vlm-scope').value;
- if((f.includes('places')||f.includes('trips')||(f.includes('landmarks')&&scope==='no_gps'))&&!f.includes('gps'))need.push('拍摄信息');
- if(f.includes('landmarks')&&scope!=='all'&&!f.includes('classify'))need.push('照片类别');
- $('dependency-note').textContent=(need.length?'会自动读取所需的'+need.join('和')+'。 ':'')+(f.includes('frames')?'提取画面时会自动包含视频。 ':'')+'只运行你选择的功能。';
+ ['quick','travel','content'].forEach(key=>$(key+'-options').classList.toggle('hidden',key!==mode));
+ $('deep-scope').classList.toggle('hidden',!deep);
+ $('content-note').textContent=deep?'先完成普通识别，再用本地 Qwen-VL 描述所选范围的内容；相似组只识别建议保留项。全部照片通常耗时更多。':'同一次分析提供照片分类和 AI 相似候选，自动复用已有结果。';
+ $('geo-note').textContent=$('geo-mode').value==='online'?'联网查询会发送 GPS 坐标，获取中文地名；没有 GPS 的照片仍可按时间分组。':'全程离线读取时间和 GPS、查找城市并按时间分组；城市通常为拼音或英文。';
+ $('mode-caption').textContent=mode==='quick'?($('similar-ai').checked?'AI 增强 · 附带内容分类，耗时增加':'快速处理 · 无需 AI 模型'):mode==='travel'?'读取拍摄信息 · 无需 AI 模型':deep?'深度识别 · 需要本地 Qwen-VL，耗时较长':'普通识别 · 本地 AI 分类与相似查找';
 }
 function showPage(next,load=true){
  currentPage=next;
@@ -54,7 +54,7 @@ function empty(title,description,kind='photo'){return `<div class="empty"><div c
 function jobRow(j){
  const tint={done:'green',running:'blue',queued:'amber',partial:'amber',failed:'red'}[j.status]||'';
  const usable=['done','partial','failed','cancelled','running'].includes(j.status);
- const summary=j.options?j.options.features.map(f=>names[f]).filter(Boolean).join(' · '):'之前的整理记录';
+ const o=j.options;const summary=o?.mode?({quick:'清理相似和模糊 · '+(o.cleanup_level==='ai'?'AI 增强，附内容分类':'快速处理'),travel:'按时间和地点整理',content:'识别照片内容 · '+(o.content_level==='deep'?'深度识别':'普通识别')}[o.mode]):o?o.features.map(f=>names[f]).filter(Boolean).join(' · '):'之前的整理记录';
  return `<div class="job-row"><div class="folder-badge">${icon('folder')}</div><div class="job-main"><div class="job-name"><span title="${esc(j.input_dir)}">${esc(basename(j.input_dir))}</span><span class="pill ${tint}">${statusNames[j.status]||'整理记录'}</span></div><div class="job-sub" title="${esc(j.input_dir)}">${esc(dateText(j.created,true))}　${esc(summary)}</div></div><div class="job-actions">${usable?`<button class="link-button" data-action="view" data-id="${j.id}">查看照片</button>`:''}<details><summary aria-label="更多操作">•••</summary><div class="job-menu"><button data-action="reuse" data-id="${j.id}">再次整理这个文件夹</button>${j.status==='running'||j.status==='queued'?`<button data-action="cancel" data-id="${j.id}">暂停整理</button>`:`<button data-action="retry" data-id="${j.id}">继续上次整理</button>`}</div></details></div></div>`;
 }
 function syncJobSelect(){
@@ -94,16 +94,17 @@ function renderActivity(data){
  $('pipe-log').textContent=(p.log_tail||[]).join('\n');
 }
 function reuseJob(id){
- const j=jobs.find(j=>j.id===id);if(!j)return;$('dir').value=j.input_dir;
- if(j.options){const o=j.options;document.querySelectorAll('[name="feature"]').forEach(x=>x.checked=o.features.includes(x.value));$('videos').checked=o.include_videos;for(const [key,input] of [['geo_mode','geo-mode'],['vlm_scope','vlm-scope'],['scenic_threshold','thr'],['similar_threshold','similar-thr'],['dup_hamming','hamming'],['trip_gap_hours','trip-gap'],['vlm_model','vlm-model']])$(input).value=o[key];$('reuse-legacy-vlm').checked=o.reuse_legacy_vlm!==false;updateMode();$('advanced').open=mode==='custom';}
- else{applyMode('quick');$('videos').checked=false;}
- $('force').checked=false;showPage('home');$('dir').focus();
+ const j=jobs.find(x=>x.id===id);if(!j)return;$('dir').value=j.input_dir;const o=j.options||{},f=o.features||[];
+ mode=o.mode||(f.includes('phash')||f.includes('quality')?'quick':f.includes('landmarks')||f.includes('classify')?'content':f.includes('similar')?'quick':f.includes('gps')?'travel':'quick');
+ $('similar-ai').checked=o.cleanup_level==='ai'||f.includes('similar');
+ document.querySelector('[name="content-level"][value="'+(o.content_level||(f.includes('landmarks')?'deep':'ordinary'))+'"]').checked=true;
+ $('videos').checked=!!o.include_videos;$('geo-mode').value=o.geo_mode||'offline';$('vlm-scope').value=o.vlm_scope||'all';
+ updateMode();showPage('home');$('dir').focus();
 }
 async function startJob(){
  const path=$('dir').value.trim();if(!path){toast('请先选择一个照片文件夹',true);$('dir').focus();return;}
- const chosen=features();if(!chosen.length){toast('请至少选择一项整理功能',true);$('advanced').open=true;return;}
  const button=$('start-button');button.disabled=true;button.innerHTML='<span class="spinner"></span>正在开始…';
- const body={input_dir:path,features:chosen,include_videos:$('videos').checked,geo_mode:$('geo-mode').value,vlm_scope:$('vlm-scope').value,scenic_threshold:Number($('thr').value),similar_threshold:Number($('similar-thr').value),dup_hamming:Number($('hamming').value),trip_gap_hours:Number($('trip-gap').value),vlm_model:$('vlm-model').value,force:$('force').checked,reuse_legacy_vlm:$('reuse-legacy-vlm').checked};
+ const body={input_dir:path,mode,cleanup_level:$('similar-ai').checked?'ai':'fast',content_level:contentLevel(),include_videos:$('videos').checked,geo_mode:$('geo-mode').value,vlm_scope:$('vlm-scope').value};
  try{await api('/api/jobs',body);toast('已开始整理，完成后可以查看照片');await loadJobs();$('activity').scrollIntoView({behavior:'smooth',block:'nearest'});}catch(ex){toast(ex.message,true);}finally{button.disabled=false;button.innerHTML=icon('sparkle')+'开始整理';}
 }
 async function viewJob(id){currentJob=id;selected.clear();rows=[];category='all';showPage('results',false);await loadResults();}
@@ -118,21 +119,23 @@ async function loadResults(refresh=false){
   if(refresh)toast('已刷新已有结果');
  }catch(ex){if(ticket!==requestVersion)return;rows=[];filtered=[];$('photo-results').innerHTML=empty('暂时无法读取照片',ex.message);$('res-count').textContent='';toast(ex.message,true);}
 }
-function matches(row,type){const label=String(row['建议标签']||'');return type==='all'||({similar:label==='可删-重复'||/相似/.test(label),blurry:label==='可删-模糊',documents:/截图|文档/.test(label),travel:['景点','旅行素材'].includes(label)})[type];}
+function matches(row,type){const label=String(row['建议标签']||'');return type==='all'||({similar:label==='可删-重复'||/相似/.test(label),blurry:label==='可删-模糊',documents:/截图|文档/.test(label),travel:['景点','旅行素材'].includes(label),content:!!(row['CLIP类别']||row['VLM场景'])})[type];}
 function labelInfo(row){
- if(row['配对状态'])return [row['建议标签'],row['配对状态'].startsWith('missing_')?'amber':''];
+ if(row['配对状态'])return [row['建议标签'],row['配对状态'].startsWith('missing_')?'amber':['paired','embedded'].includes(row['配对状态'])?'green':''];
  if(!photoSelectable(row))return ['建议保留，已保护','green'];
  const l=String(row['建议标签']||'');
  if(l==='可删-重复'||/相似/.test(l))return ['相似照片，待确认','amber'];if(l==='可删-模糊')return ['可能模糊','amber'];if(/截图|文档/.test(l))return ['截图 / 文档',''];
  if(l==='景点')return [row['VLM景点']||'景点照片','blue'];if(l==='旅行素材')return ['旅行照片','blue'];
- if(row['失败环节'])return ['需要重新检查','red'];if(rows.some(r=>r['__abs_best']===row['__abs']))return ['推荐保留','green'];
+ if(row['失败环节'])return ['需要重新检查','red'];if(row['CLIP类别'])return [clipNames[row['CLIP类别']]||row['CLIP类别'],'blue'];if(rows.some(r=>r['__abs_best']===row['__abs']))return ['推荐保留','green'];
  return [{日常:'日常照片',未评估:'尚未分析',未判重复:'未发现重复',保留候选:'保留候选'}[l]||l||'未分类',''];
 }
 function renderCategories(){
- $('result-tabs').innerHTML=Object.entries(categoryNames).map(([k,n])=>`<button class="result-tab ${k===category?'active':''}" data-category="${k}">${n}<span>${rows.filter(r=>matches(r,k)).length}</span></button>`).join('');
+ $('result-tabs').innerHTML=Object.entries(categoryNames).filter(([k])=>k!=='content'||rows.some(r=>matches(r,'content'))).map(([k,n])=>`<button class="result-tab ${k===category?'active':''}" data-category="${k}">${n}<span>${rows.filter(r=>matches(r,k)).length}</span></button>`).join('');
 }
 function applyFilter(){
- const q=$('q').value.trim().toLowerCase();filtered=rows.filter(r=>matches(r,category)&&(!q||['相对路径','VLM景点','VLM城市','城市(GPS)','地名','VLM场景','拍摄时间'].some(k=>String(r[k]||'').toLowerCase().includes(q))));
+ if(category==='content'&&!rows.some(r=>matches(r,'content')))category='all';
+ const categories=[...new Set(rows.map(r=>r['CLIP类别']).filter(Boolean))].sort();const previous=$('content-filter').value;$('content-filter').innerHTML='<option value="">全部类别</option>'+categories.map(k=>`<option value="${esc(k)}">${esc(clipNames[k]||k)}</option>`).join('');$('content-filter').value=categories.includes(previous)?previous:'';$('content-filter-wrap').classList.toggle('hidden',category!=='content'||!categories.length);
+ const chosen=$('content-filter').value;const q=$('q').value.trim().toLowerCase();filtered=rows.filter(r=>matches(r,category)&&(category!=='content'||!chosen||r['CLIP类别']===chosen)&&(!q||String(clipNames[r['CLIP类别']]||'').includes(q)||['相对路径','VLM景点','VLM城市','城市(GPS)','地名','VLM场景','主要物体','CLIP类别','拍摄时间'].some(k=>String(r[k]||'').toLowerCase().includes(q))));
  const order=$('sort-order').value;if(order==='name')filtered.sort((a,b)=>String(a['相对路径']).localeCompare(String(b['相对路径']),'zh'));
  if(order.startsWith('date'))filtered.sort((a,b)=>{const x=String(a['拍摄时间']||''),y=String(b['拍摄时间']||'');if(!x)return 1;if(!y)return -1;return x.localeCompare(y)*(order==='date-desc'?-1:1);});
  renderCategories();renderPhotos();
@@ -141,7 +144,7 @@ function thumbnail(row){return row['类型']==='video'?icon('play'):`<img src="/
 function renderPhotos(){
  const count=Math.max(1,Math.ceil(filtered.length/pageSize));page=Math.min(page,count-1);const start=page*pageSize;const visible=filtered.slice(start,start+pageSize);
  const content=visible.map((r,n)=>{
-  const index=start+n,label=labelInfo(r),selectable=photoSelectable(r);if(!selectable)selected.delete(r['__abs']);const checked=selected.has(r['__abs']);const location=r['VLM城市']||r['城市(GPS)']||r['地名'];const meta=[dateText(r['拍摄时间']),location].filter(Boolean).join(' · ')||(r['类型']==='video'?'视频':'照片');
+  const index=start+n,label=labelInfo(r),selectable=photoSelectable(r);if(!selectable)selected.delete(r['__abs']);const checked=selected.has(r['__abs']);const location=r['VLM城市']||r['城市(GPS)']||r['地名'];const meta=[clipNames[r['CLIP类别']],dateText(r['拍摄时间']),location].filter(Boolean).join(' · ')||(r['类型']==='video'?'视频':'照片');
   const disabled=selectable?'':'disabled title="建议保留项已保护"';
   if(view==='list')return `<tr data-card="${index}" class="${checked?'selected':''}"><td><input type="checkbox" data-check="${index}" aria-label="选择 ${esc(basename(r['相对路径']))}" ${checked?'checked':''} ${disabled}></td><td><div class="list-file">${thumbnail(r)}<button data-preview="${index}">${esc(basename(r['相对路径']))}</button></div></td><td>${esc(dateText(r['拍摄时间']))||'—'}</td><td>${esc(location)||'—'}</td><td><span class="pill ${label[1]}">${esc(label[0])}</span></td><td><button class="link-button" data-preview="${index}">查看</button></td></tr>`;
   return `<article class="photo-card ${checked?'selected':''}" data-card="${index}"><label class="photo-checkbox"><input type="checkbox" data-check="${index}" aria-label="选择 ${esc(basename(r['相对路径']))}" ${checked?'checked':''} ${disabled}></label>${r['类型']==='video'?'<span class="photo-type">'+icon('play')+'视频</span>':''}<button class="photo-image" data-preview="${index}" aria-label="预览 ${esc(basename(r['相对路径']))}">${thumbnail(r)}</button><div class="photo-info"><div class="photo-name" title="${esc(r['相对路径'])}">${esc(basename(r['相对路径']))}</div><span class="pill ${label[1]}">${esc(label[0])}</span><div class="photo-meta">${esc(meta)}</div></div></article>`;
@@ -177,7 +180,7 @@ function renderPreview(){
  const collection=previewRows();const r=collection[previewIndex];if(!r)return;const label=labelInfo(r),best=r['__abs_best'],comparing=previewMode==='results'&&previewCompare&&best;$('preview-title').textContent=comparing?'对比照片':'照片预览';
  $('preview-position').textContent=`${previewIndex+1} / ${collection.length}`;$('preview-select').checked=(previewMode==='pairs'?pairSelected:selected).has(r['__abs']);$('preview-select').disabled=previewMode==='pairs'?!r['__can_delete']:!photoSelectable(r);
  $('preview-media').innerHTML=comparing?`<figure><figcaption>当前照片</figcaption>${mediaHTML(r,r['__abs'])}</figure><figure><figcaption>建议保留</figcaption>${mediaHTML({...r,'类型':/\.(mp4|mov|mkv|avi)$/i.test(best)?'video':'photo'},best)}</figure>`:mediaHTML(r,r['__abs']);
- const fields=[['拍摄时间',dateText(r['拍摄时间'],true)],['拍摄地点',[r['VLM城市']||r['城市(GPS)'],r['地名']].filter(Boolean).join(' · ')],['景点',r['VLM景点']],['照片内容',r['VLM场景']],['配对检查',r['被删的一半']?'已删除：'+r['被删的一半']:''],['提示',r['失败环节']]];
+ const fields=[['拍摄时间',dateText(r['拍摄时间'],true)],['拍摄地点',[r['VLM城市']||r['城市(GPS)'],r['地名']].filter(Boolean).join(' · ')],['景点',r['VLM景点']],['照片类别',clipNames[r['CLIP类别']]],['照片内容',r['VLM场景']],['主要物体',r['主要物体']],['配对检查',r['被删的一半']?'已删除：'+r['被删的一半']:''],['提示',r['失败环节']]];
  const detail=Object.entries(r).filter(([k,v])=>!k.startsWith('__')&&v!==''&&v!=null).map(([k,v])=>`<dl class="info-item"><dt>${esc(k)}</dt><dd>${esc(k==='建议标签'?label[0]:v)}</dd></dl>`).join('');
  $('preview-info').innerHTML=`<h3>${esc(basename(r['相对路径']))}</h3><span class="pill ${label[1]}">${esc(label[0])}</span>${fields.filter(([,v])=>v).map(([k,v])=>`<dl class="info-item"><dt>${k}</dt><dd>${esc(v)}</dd></dl>`).join('')}${best?`<button class="secondary" id="compare-button">${previewCompare?'返回单张预览':'对比建议保留的照片'}</button>`:''}<details><summary>文件详情</summary>${detail}</details>`;
  $('preview-media').querySelectorAll('video').forEach(video=>video.addEventListener('error',()=>{const wrap=document.createElement('div');wrap.style.textAlign='center';wrap.innerHTML=`<img src="/media/frame?path=${encodeURIComponent(r['__abs'])}" alt="视频画面"><p class="muted small" style="margin-top:10px">浏览器暂不支持此视频格式</p><button class="secondary" id="transcode-video" style="margin-top:12px">转换后播放</button>`;video.replaceWith(wrap);wrap.querySelector('button').onclick=()=>{wrap.innerHTML=`<video controls autoplay src="/media/transcode?path=${encodeURIComponent(r['__abs'])}"></video>`;};}));
@@ -217,7 +220,8 @@ document.addEventListener('click',async event=>{
 });
 document.addEventListener('change',event=>{
  const el=event.target;
- if(el.name==='feature'||el.id==='vlm-scope')updateMode(el.name==='feature'?el.value:'');
+ if(el.name==='content-level'||['similar-ai','geo-mode','vlm-scope'].includes(el.id))updateMode();
+ if(el.id==='content-filter'){page=0;applyFilter();}
  if(el.dataset.check!==undefined){const r=filtered[Number(el.dataset.check)];if(r&&photoSelectable(r)){el.checked?selected.add(r['__abs']):selected.delete(r['__abs']);renderPhotos();}}
  if(el.id==='select-page'){filtered.slice(page*pageSize,(page+1)*pageSize).filter(photoSelectable).forEach(r=>el.checked?selected.add(r['__abs']):selected.delete(r['__abs']));renderPhotos();}
  if(el.id==='preview-select'){const r=previewRows()[previewIndex];if(r){const chosen=previewMode==='pairs'?pairSelected:selected;if(previewMode==='pairs'?!r['__can_delete']:!photoSelectable(r))return;el.checked?chosen.add(r['__abs']):chosen.delete(r['__abs']);previewMode==='pairs'?renderPairResults():renderPhotos();}}

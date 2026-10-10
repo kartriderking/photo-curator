@@ -63,39 +63,26 @@
     <div class="mode-grid" id="mode-grid">
       <button class="mode-card active" data-mode="quick" aria-pressed="true"><span class="mode-select">✓</span><div class="mode-icon"><svg class="icon"><use href="#i-stack"/></svg></div><div class="mode-title">清理相似和模糊<span class="pill blue">推荐</span></div><p>找出重复、相似与模糊照片，<br>为值得留下的回忆腾出空间。</p></button>
       <button class="mode-card" data-mode="travel" aria-pressed="false"><span class="mode-select"></span><div class="mode-icon"><svg class="icon"><use href="#i-pin"/></svg></div><div class="mode-title">按时间和地点整理</div><p>读取拍摄时间与位置，<br>让散落的旅行照片更有条理。</p></button>
-      <button class="mode-card" data-mode="content" aria-pressed="false"><span class="mode-select"></span><div class="mode-icon"><svg class="icon"><use href="#i-sparkle"/></svg></div><div class="mode-title">识别照片内容<span class="pill amber">较慢</span></div><p>识别风景、美食和知名景点，<br>更容易找回你想要的照片。</p></button>
+      <button class="mode-card" data-mode="content" aria-pressed="false"><span class="mode-select"></span><div class="mode-icon"><svg class="icon"><use href="#i-sparkle"/></svg></div><div class="mode-title">识别照片内容</div><p>先分类，或进一步描述内容，<br>按需要选择识别深度。</p></button>
     </div>
     <div class="options-line"><label class="switch-label"><input class="switch" type="checkbox" id="videos">也整理这个文件夹里的视频</label><span id="mode-caption">轻量整理，无需启动 AI 服务</span></div>
-    <details class="advanced" id="advanced"><summary><svg class="icon"><use href="#i-chevron"/></svg>自定义功能与高级设置<span id="custom-indicator"></span></summary>
-      <div class="advanced-inner">
-        <div class="feature-grid" id="feature-options">
-          <label class="feature-option"><input type="checkbox" name="feature" value="phash" checked>查找相似照片</label>
-          <label class="feature-option"><input type="checkbox" name="feature" value="quality" checked>筛选模糊照片</label>
-          <label class="feature-option"><input type="checkbox" name="feature" value="gps">读取拍摄时间和 GPS</label>
-          <label class="feature-option"><input type="checkbox" name="feature" value="places">查找城市和地名</label>
-          <label class="feature-option"><input type="checkbox" name="feature" value="trips">按拍摄时间分组</label>
-          <label class="feature-option"><input type="checkbox" name="feature" value="classify">识别照片类别</label>
-          <label class="feature-option"><input type="checkbox" name="feature" value="landmarks">识别知名景点</label>
-          <label class="feature-option"><input type="checkbox" name="feature" value="frames">仅提取视频画面</label>
-        </div>
-        <div class="similar-options"><label class="check-label"><input type="checkbox" name="feature" value="similar" id="similar-ai">用 AI 扩大相似查找范围（较慢）</label><p class="muted small">默认快速查找，包含重复和外观近似的照片。AI 增强需要本地模型；两种方式的结果都显示在「相似照片」中，需预览确认。</p></div>
-        <p class="muted small" id="dependency-note" style="margin-top:14px"></p>
-        <div class="settings-grid">
-          <label>城市查询方式<select id="geo-mode"><option value="offline">离线城市（拼音 / 英文）</option><option value="online">联网中文地名</option></select></label>
-          <label>景点识别范围<select id="vlm-scope"><option value="scenic">仅风景候选照片</option><option value="no_gps">没有 GPS 的照片</option><option value="all">所有照片</option></select></label>
-          <label>时间分组间隔（小时）<input type="number" id="trip-gap" min="0.1" step="0.1" value="36"></label>
-          <label>快速查找容差（pHash）<input type="number" id="hamming" min="0" max="64" value="4"></label>
-          <label>AI 相似匹配阈值<input type="number" id="similar-thr" min="0" max="1" step="0.01" value="0.95"></label>
-          <label>风景候选阈值<input type="number" id="thr" min="0" max="1" step="0.05" value="0.35"></label>
-          <label>景点识别模型<input id="vlm-model" value="qwen3-vl:8b"></label>
-        </div>
-        <div class="advanced-notes">
-          <label class="check-label"><input type="checkbox" id="reuse-legacy-vlm" checked>复用历史景点结果（旧模型信息未知，结果会注明来源）</label>
-          <label class="check-label"><input type="checkbox" id="force">重新计算所选功能，通常不需要勾选</label>
-          <p>联网查询会发送 GPS 坐标。时间分组不一定代表旅行；近似照片需要人工确认。</p>
-        </div>
+    <div class="mode-options" id="quick-options">
+      <label class="check-label"><input type="checkbox" id="similar-ai">用 AI 扩大相似查找范围</label>
+      <p class="muted small">默认快速查找相似和模糊照片。开启 AI 后，还会附带风景、美食、人物等内容分类，处理时间更长。</p>
+    </div>
+    <div class="mode-options hidden" id="travel-options">
+      <label class="option-label">地名查询<select id="geo-mode"><option value="offline">离线城市（拼音 / 英文）</option><option value="online">联网中文地名</option></select></label>
+      <p class="muted small" id="geo-note">读取拍摄时间和 GPS，并按时间分组；未记录 GPS 的照片也可按时间查看。</p>
+    </div>
+    <div class="mode-options hidden" id="content-options">
+      <div class="recognition-levels" role="group" aria-label="内容识别深度">
+        <label><input type="radio" name="content-level" value="ordinary" checked><span><strong>普通识别</strong><small>识别照片类别，并查找 AI 相似照片</small></span></label>
+        <label><input type="radio" name="content-level" value="deep"><span><strong>深度识别</strong><small>增加场景描述、主要物体和景点识别，较慢</small></span></label>
       </div>
-    </details>
+      <label class="option-label hidden" id="deep-scope">深度识别范围<select id="vlm-scope"><option value="all">全部照片</option><option value="scenic">仅风景候选照片</option><option value="no_gps">没有 GPS 的照片</option></select></label>
+      <p class="muted small" id="content-note">普通识别在本机完成，同一次分析提供照片分类和相似候选。</p>
+    </div>
+    <p class="muted small task-cost" id="dependency-note">自动复用已有分析，每次整理保留独立结果。</p>
     <div class="start-line"><div class="small-info"><svg class="icon"><use href="#i-shield"/></svg><p>自动复用已整理的结果，原照片由你决定是否删除。</p></div><button class="primary" id="start-button"><svg class="icon"><use href="#i-sparkle"/></svg>开始整理</button></div>
   </div>
   <div class="card activity hidden" id="activity"><div class="activity-heading"><div><h3 id="activity-title">正在整理</h3><p id="activity-detail" class="muted small" style="margin-top:4px"></p></div><button class="link-button" id="activity-results">查看照片</button></div><div class="progress-track" id="progress-track"><i id="activity-progress"></i></div><details class="details-log"><summary>查看运行详情</summary><div id="activity-stages"></div><pre id="pipe-log"></pre></details></div>
@@ -107,24 +94,25 @@
   <div class="page-heading"><div><h1 id="result-heading">我的照片</h1><p id="result-description">先看看照片，再决定哪些值得留下。</p></div><button class="secondary" id="export-button"><svg class="icon"><use href="#i-download"/></svg>导出清单</button></div>
   <div class="result-toolbar"><div class="result-library"><svg class="icon muted"><use href="#i-folder"/></svg><select id="sel-job" aria-label="选择整理记录"><option value="">选择一个已整理的文件夹</option></select></div><div class="tools"><div class="search"><svg class="icon"><use href="#i-search"/></svg><input id="q" placeholder="搜索照片、城市或景点" aria-label="搜索照片"></div><button class="secondary" id="refresh-results" title="只刷新已有结果"><svg class="icon"><use href="#i-refresh"/></svg>刷新</button></div></div>
   <div class="result-tabs" id="result-tabs"></div>
+  <label class="content-filter hidden" id="content-filter-wrap">照片类别<select id="content-filter"><option value="">全部类别</option></select></label>
   <div class="result-hint" id="result-hint"><svg class="icon"><use href="#i-info"/></svg><span>相似照片包含重复和近似候选。建议仅供参考，先放大或对比，再决定是否保留。</span></div>
   <div class="view-bar"><label class="check-label"><input type="checkbox" id="select-page">选中本页<span id="res-count"></span></label><div class="view-controls"><select id="sort-order" aria-label="照片排序"><option value="default">默认排序</option><option value="date-desc">最新拍摄在前</option><option value="date-asc">最早拍摄在前</option><option value="name">按文件名</option></select><div class="segmented"><button class="active" data-view="grid" title="缩略图" aria-label="缩略图视图"><svg class="icon"><use href="#i-grid"/></svg></button><button data-view="list" title="列表" aria-label="列表视图"><svg class="icon"><use href="#i-list"/></svg></button></div></div></div>
   <p class="muted small selection-help">拖动框选本页，Ctrl / Shift 可追加；Ctrl+A 全选当前分类。建议保留项会自动跳过。</p>
   <div id="photo-results"></div><div id="pager" class="pager"></div>
 </section>
 <section id="page-pairs" class="hidden">
-  <div class="page-heading"><div><h1>检查实况照片</h1><p>直接选择文件夹，按实况 UUID 查找缺失的照片或视频。</p></div></div>
+  <div class="page-heading"><div><h1>检查实况照片</h1><p>直接选择文件夹，按实况标识查找缺失的照片或视频。</p></div></div>
   <div class="card setup-card">
     <h2 class="section-title"><svg class="icon"><use href="#i-folder"/></svg>选择要检查的文件夹</h2>
     <div class="folder-line"><div class="folder-input-wrap"><svg class="icon"><use href="#i-folder"/></svg><input id="pair-dir" aria-label="实况照片文件夹路径" placeholder="粘贴文件夹路径，或点击右侧选择" autocomplete="off"></div><button class="secondary" id="choose-pair-folder">选择文件夹</button></div>
     <div class="start-line"><label class="check-label"><input type="checkbox" id="pair-recursive" checked>包含子文件夹</label><div class="tools"><button class="secondary hidden" id="cancel-pair-scan">停止检查</button><button class="primary" id="start-pair-scan">开始检查</button></div></div>
-    <p class="muted small pair-explanation">照片和视频按 UUID 配对，文件名不同也能识别。检查只读取元数据，无需先整理照片。</p>
+    <p class="muted small pair-explanation">照片和视频按 Apple UUID / vivo 实况标识配对，文件名不同也能识别。检查只读取元数据，无需先整理照片。</p>
     <div id="pair-progress" class="hidden"><p id="pair-progress-text" class="muted small"></p><div class="progress-track"><i id="pair-progress-bar"></i></div></div>
   </div>
   <div id="pair-summary" class="pair-summary hidden"></div>
   <div id="pair-warning" class="result-hint hidden" role="status"></div>
   <div class="result-tabs" id="pair-tabs"></div>
-  <div class="pair-result-tools hidden" id="pair-result-tools"><label class="check-label"><input type="checkbox" id="pair-select-page">选中本页<span id="pair-selection-count"></span></label><div class="tools"><div class="search"><svg class="icon"><use href="#i-search"/></svg><input id="pair-search" placeholder="搜索文件名或 UUID" aria-label="搜索实况检查结果"></div><button class="danger" id="delete-pair-files" disabled>移入回收站</button></div></div>
+  <div class="pair-result-tools hidden" id="pair-result-tools"><label class="check-label"><input type="checkbox" id="pair-select-page">选中本页<span id="pair-selection-count"></span></label><div class="tools"><div class="search"><svg class="icon"><use href="#i-search"/></svg><input id="pair-search" placeholder="搜索文件名或配对标识" aria-label="搜索实况检查结果"></div><button class="danger" id="delete-pair-files" disabled>移入回收站</button></div></div>
   <div id="pair-results"></div><div id="pair-pager" class="pager"></div>
 </section>
 </main>

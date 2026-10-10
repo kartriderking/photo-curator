@@ -241,6 +241,95 @@ class FeaturesTest(unittest.TestCase):
         self.assertEqual(result.iloc[0]['建议标签'], '未评估')
         self.assertIn('无法验证', result.iloc[0]['失败环节'])
 
+    def test_product_modes_select_only_their_cost_tier(self):
+        self.assertEqual(normalize_options({'mode': 'quick'})['features'], ['phash', 'quality'])
+        self.assertEqual(set(normalize_options({'mode': 'quick', 'cleanup_level': 'ai'})['features']),
+                         {'phash', 'quality', 'similar', 'classify'})
+        self.assertEqual(set(normalize_options({'mode': 'travel'})['features']), {'gps', 'places', 'trips'})
+        ordinary = normalize_options({'mode': 'content'})
+        self.assertEqual(set(ordinary['features']), {'classify', 'similar'})
+        deep = normalize_options({'mode': 'content', 'content_level': 'deep'})
+        self.assertEqual(set(deep['features']), {'classify', 'similar', 'landmarks'})
+        self.assertEqual(deep['vlm_scope'], 'all')
+        self.assertEqual(deep['vlm_task'], 'content')
+        for body in ({'mode': 'unknown'}, {'mode': 'quick', 'cleanup_level': 'unknown'}):
+            with self.assertRaises(ValueError):
+                normalize_options(body)
+
+    def test_ordinary_content_encodes_once_and_cleanup_reuses_both_outputs(self):
+        import numpy as np
+        from types import SimpleNamespace
+        self.photo('a.jpg')
+        self.photo('b.jpg', 'blue')
+        batches = []
+        class Scorer:
+            cat_names = ['food', 'scenic']
+            def encode(self, paths):
+                batches.append(paths)
+                return np.array([[.9, .1] for _ in paths]), np.array([[1., 0.] for _ in paths], dtype='float16')
+        fake_torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False))
+        with patch.dict(sys.modules, {'step4_clip': SimpleNamespace(ClipScorer=Scorer), 'torch': fake_torch}), \
+             patch('step5_vlm._ask_ollama', side_effect=AssertionError('ordinary mode must not use Qwen')):
+            jd, state = self.run_features([], mode='content')
+        self.assertEqual(len(batches), 1)
+        self.assertEqual(len(batches[0]), 2)
+        report = self.report(jd)
+        self.assertTrue(report['CLIP类别'].eq('food').all())
+        self.assertEqual(report['同组最优'].fillna('').ne('').sum(), 1)
+        with patch.dict(sys.modules, {'step4_clip': None, 'torch': None, 'open_clip': None}):
+            jd, state = self.run_features([], mode='quick', cleanup_level='ai')
+        self.assertEqual(state['features']['classify']['cached'], 2)
+        self.assertEqual(state['features']['similar']['cached'], 2)
+        self.assertIn('CLIP类别', self.report(jd).columns)
+
+    def test_deep_content_uses_general_prompt_and_preserves_objects(self):
+        import numpy as np
+        item = self.photo('a.jpg')
+        with CacheDB(self.db_path) as db:
+            db.put_many('clip', signature('clip'), [(item, {'clip_top': 'food', 'clip_top_score': .9}, np.array([1., 0.]))])
+            db.put_many('vlm', 'legacy', [(item, {'scene': 'old travel description'}, None)])
+        result = {'landmark': '', 'city': '', 'scene': '桌上的饭菜', 'objects': '碗,筷子', 'confidence': 'high', 'is_travel': False}
+        with patch('step5_vlm._ask_ollama', return_value=result) as ask, patch('requests.post'):
+            jd, state = self.run_features([], mode='content', content_level='deep')
+        self.assertEqual(ask.call_args.kwargs['task'], 'content')
+        self.assertEqual(self.report(jd).iloc[0]['主要物体'], '碗,筷子')
+        self.assertNotEqual(signature('vlm', normalize_options({'features': ['landmarks']})),
+                            signature('vlm', normalize_options({'mode': 'content', 'content_level': 'deep'})))
+
+    def test_cli_keeps_deep_product_options_for_worker_execution(self):
+        import cli
+        args = ['cli.py', '--input-dir', str(self.library), '--mode', 'content', '--content-level', 'deep',
+                '--vlm-scope', 'all', '--job-dir', str(self.root / 'cli-job')]
+        with patch.object(sys, 'argv', args), patch('pipeline.execute') as execute_mock:
+            cli.main()
+        options = execute_mock.call_args.args[1]
+        self.assertEqual(options['vlm_task'], 'content')
+        self.assertEqual(options['content_level'], 'deep')
+
+    def test_web_submission_persists_the_requested_product_tier(self):
+        import webapp
+        bodies = [{'mode': 'quick'}, {'mode': 'quick', 'cleanup_level': 'ai'}, {'mode': 'travel'},
+                  {'mode': 'content'}, {'mode': 'content', 'content_level': 'deep'}]
+        with patch.object(webapp, 'DB_PATH', self.db_path), patch.object(webapp, 'JOB_DATA_DIR', self.root / 'web-jobs'), \
+             patch('webapp._ensure_worker'):
+            submitted = [webapp.create_job({'input_dir': str(self.library), **body}) for body in bodies]
+        with TaskStore(path=self.db_path) as store:
+            for job, body in zip(submitted, bodies):
+                saved = store.get_job(job['id'])['options']
+                self.assertEqual(saved, normalize_options(body))
+        self.assertNotIn('landmarks', submitted[3]['options']['features'])
+        self.assertEqual(submitted[4]['options']['vlm_task'], 'content')
+
+    def test_general_vlm_request_and_json_parser_include_objects(self):
+        from step5_vlm import _ask_ollama, CONTENT_PROMPT
+        response = {'message': {'content': json.dumps({'scene': '桌上的饭菜', 'objects': '碗,筷子', 'is_travel': False})}}
+        with patch('step5_vlm.requests.post') as post:
+            post.return_value.json.return_value = response
+            result = _ask_ollama('http://localhost:11434', 'test-model', 'test-image', task='content')
+        self.assertEqual(post.call_args.kwargs['json']['messages'][0]['content'], CONTENT_PROMPT)
+        self.assertEqual(result['objects'], '碗,筷子')
+        self.assertEqual(result['scene'], '桌上的饭菜')
+
 
 if __name__ == '__main__':
     unittest.main()

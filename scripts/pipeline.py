@@ -41,7 +41,7 @@ def scan(root, include_videos):
 
 def legacy_vlm(db, item, opts):
     data = db.get(item, 'vlm', signature('vlm', opts))
-    if data is None and opts.get('reuse_legacy_vlm', True) and opts['vlm_model'] == 'qwen3-vl:8b':
+    if data is None and opts.get('vlm_task', 'landmarks') == 'landmarks' and opts.get('reuse_legacy_vlm', True) and opts['vlm_model'] == 'qwen3-vl:8b':
         data = db.get(item, 'vlm', 'legacy')
     return data
 
@@ -412,7 +412,10 @@ def execute(root, options, job_dir, db_path=None):
             status(['landmarks'], 'running', cached, len(candidates), cached)
             for n, i in enumerate(pending, 1):
                 try:
-                    r = _ask_ollama(CONFIG['ollama_url'], options['vlm_model'], _b64_image(i['path']))
+                    if options.get('vlm_task') == 'content':
+                        r = _ask_ollama(CONFIG['ollama_url'], options['vlm_model'], _b64_image(i['path']), task='content')
+                    else:
+                        r = _ask_ollama(CONFIG['ollama_url'], options['vlm_model'], _b64_image(i['path']))
                     db.put_many('vlm', signature('vlm', options), [(i, r, None)])
                 except Exception as ex:
                     error(i, 'landmarks', ex)
@@ -566,6 +569,8 @@ def refresh_results(job_dir, db=None, snapshot=None):
                     sources.add('历史景点（模型未知）' if v['_source'] == 'legacy' else '新缓存')
                 r.update({'VLM景点': v.get('landmark'), 'VLM城市': v.get('city'), 'VLM场景': v.get('scene'),
                           'VLM置信度': v.get('confidence'), '是否旅行': v.get('is_travel')})
+                if opts.get('vlm_task') == 'content':
+                    r['主要物体'] = v.get('objects')
                 if v.get('landmark') and v.get('confidence') != 'low' and not r['建议标签'].startswith('可删'):
                     r['建议标签'] = '景点'
             if p in duplicate:

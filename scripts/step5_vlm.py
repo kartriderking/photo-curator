@@ -24,6 +24,15 @@ PROMPT = (
     "不要长篇推理。除JSON外不要输出任何其他文字。"
 )
 
+CONTENT_PROMPT = (
+    '你是照片整理助手。描述照片中实际可见的主体、动作和场景，scene 用不超过40字的中文描述。'
+    'objects 用中文列出最多5个主要物体，用逗号分隔。不要猜测人物姓名、身份或不可见的信息。'
+    '只有认出知名景点或旅游地标时才填写 landmark 和 city，否则填空字符串。\n'
+    '只输出一个JSON对象：{"landmark":"","city":"","confidence":"high/medium/low",'
+    '"scene":"场景描述","objects":"主要物体","is_travel":false}。'
+    'is_travel 表示是否像旅行途中拍摄的。不要长篇推理或输出其他文字。'
+)
+
 
 def _b64_image(path: str) -> str:
     from PIL import Image
@@ -39,10 +48,10 @@ def _b64_image(path: str) -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
-def _ask_ollama(url: str, model: str, img_b64: str) -> dict:
+def _ask_ollama(url: str, model: str, img_b64: str, task='landmarks') -> dict:
     r = requests.post(f"{url}/api/chat", json={
         "model": model,
-        "messages": [{"role": "user", "content": PROMPT, "images": [img_b64]}],
+        "messages": [{"role": "user", "content": CONTENT_PROMPT if task == 'content' else PROMPT, "images": [img_b64]}],
         "stream": False,
         # 不用 format=json：qwen3-vl 的思考模板与 JSON 约束冲突会输出空 content
         "options": {"temperature": 0, "num_ctx": 8192, "num_predict": 2048},
@@ -63,6 +72,7 @@ def _ask_ollama(url: str, model: str, img_b64: str) -> dict:
                 "city": str(d.get("city", "")).strip(),
                 "confidence": str(d.get("confidence", "low")).strip().lower(),
                 "scene": str(d.get("scene", "")).strip(),
+                "objects": str(d.get("objects", "")).strip(),
                 "is_travel": bool(d.get("is_travel", False)),
             }
     raise ValueError(f"无法解析模型输出: {(msg.get('content') or msg.get('thinking') or '')[:120]}")

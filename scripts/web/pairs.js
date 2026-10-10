@@ -1,9 +1,9 @@
 'use strict';
 let pairScanId='', pairState=null, pairRows=[], pairFiltered=[], pairFilter='orphans', pairPage=0, pairTimer, pairBusy=false;
 const pairSelected=new Set();
-const pairFilters={orphans:'缺失配对',missing_video:'缺少视频',missing_photo:'缺少照片',unknown:'无法判断'};
+const pairFilters={orphans:'缺失配对',missing_video:'缺少视频',missing_photo:'缺少照片',paired:'完整实况',unknown:'无法判断'};
 
-function pairMatches(row,filter){const state=row['配对状态'];return filter==='orphans'?state.startsWith('missing_'):filter==='unknown'?!state.startsWith('missing_'):state===filter;}
+function pairMatches(row,filter){const state=row['配对状态'],complete=['paired','embedded'].includes(state);return filter==='orphans'?state.startsWith('missing_'):filter==='paired'?complete:filter==='unknown'?!state.startsWith('missing_')&&!complete:state===filter;}
 function setPairFolder(path){
  if(path===$('pair-dir').value&&pairState?.input_dir===path)return;
  $('pair-dir').value=path;pairScanId='';pairState=null;pairRows=[];pairSelected.clear();clearTimeout(pairTimer);
@@ -39,24 +39,24 @@ function renderPairState(){
  $('start-pair-scan').disabled=!!busy;$('start-pair-scan').textContent=busy?'正在检查…':pairState?'重新检查':'开始检查';
  $('cancel-pair-scan').classList.toggle('hidden',!busy);$('pair-progress').classList.toggle('hidden',!pairState);
  if(pairState){
-  $('pair-progress-text').textContent=`${{queued:'准备检查',running:'正在读取实况 UUID',done:'检查完成',stale:'需要重新检查',failed:'检查未完成',cancelled:'检查已停止'}[pairState.status]||''} · ${pairState.done} / ${pairState.total} 个文件${pairState.cached?'，复用 '+pairState.cached+' 个缓存':''}`;
+  $('pair-progress-text').textContent=`${{queued:'准备检查',running:'正在读取实况标识',done:'检查完成',stale:'需要重新检查',failed:'检查未完成',cancelled:'检查已停止'}[pairState.status]||''} · ${pairState.done} / ${pairState.total} 个文件${pairState.cached?'，复用 '+pairState.cached+' 个缓存':''}`;
   $('pair-progress-bar').style.width=(pairState.total?Math.round(pairState.done/pairState.total*100):0)+'%';
  }
  const summary=pairState?.summary||{},complete=pairState&&['done','stale'].includes(pairState.status);
  $('pair-summary').classList.toggle('hidden',!complete);
- if(complete)$('pair-summary').innerHTML=[['paired','完整配对','组'],['missing_video','仅剩照片','个'],['missing_photo','仅剩视频','个'],['no_uuid','未读到实况 UUID','个']].map(([key,label,unit])=>`<div class="card"><span>${label}</span><strong>${summary[key]||0}<small>${unit}</small></strong></div>`).join('');
+ if(complete)$('pair-summary').innerHTML=[['paired','完整配对','组'],['embedded','单文件实况','个'],['missing_video','仅剩照片','个'],['missing_photo','仅剩视频','个'],['no_uuid','未读到实况标识','个']].map(([key,label,unit])=>`<div class="card"><span>${label}</span><strong>${summary[key]||0}<small>${unit}</small></strong></div>`).join('');
  let warning=pairState?.error||'';
- if(!warning&&complete)warning=summary.error||summary.conflict?`有 ${summary.error||0} 个文件读取失败、${summary.conflict||0} 个 UUID 无法确认。请处理后重新检查，再决定是否移入回收站。`:'缺失配对只表示当前扫描范围内未找到另一半，对方也可能在其他文件夹。未读到 UUID 的文件不会被当作实况残片。';
+ if(!warning&&complete)warning=summary.error||summary.conflict?`有 ${summary.error||0} 个文件读取失败、${summary.conflict||0} 个配对标识 无法确认。请处理后重新检查，再决定是否移入回收站。`:'缺失配对只表示当前扫描范围内未找到另一半，对方也可能在其他文件夹。未读到实况标识 的文件不会被当作实况残片。';
  $('pair-warning').textContent=warning;$('pair-warning').classList.toggle('hidden',!warning);
  $('pair-result-tools').classList.toggle('hidden',!complete);renderPairResults();
 }
 function renderPairResults(){
- const query=$('pair-search').value.trim().toLowerCase();pairFiltered=pairRows.filter(r=>pairMatches(r,pairFilter)&&(!query||[r['相对路径'],r['实况UUID']].some(v=>String(v).toLowerCase().includes(query))));
+ const query=$('pair-search').value.trim().toLowerCase();pairFiltered=pairRows.filter(r=>pairMatches(r,pairFilter)&&(!query||[r['相对路径'],(r['配对标识']||r['实况UUID'])].some(v=>String(v).toLowerCase().includes(query))));
  const count=Math.max(1,Math.ceil(pairFiltered.length/pageSize));pairPage=Math.min(pairPage,count-1);const offset=pairPage*pageSize,visible=pairFiltered.slice(offset,offset+pageSize);
  $('pair-tabs').innerHTML=pairState&&['done','stale'].includes(pairState.status)?Object.entries(pairFilters).map(([key,label])=>`<button class="result-tab ${key===pairFilter?'active':''}" data-pair-filter="${key}">${label}<span>${pairRows.filter(r=>pairMatches(r,key)).length}</span></button>`).join(''):'';
- const cards=visible.map((r,n)=>`<article class="photo-card ${pairSelected.has(r['__abs'])?'selected':''}">${r['__can_delete']?`<label class="photo-checkbox"><input type="checkbox" data-pair-check="${offset+n}" aria-label="选择 ${esc(basename(r['相对路径']))}" ${pairSelected.has(r['__abs'])?'checked':''}></label>`:''}<button class="photo-image" data-pair-preview="${offset+n}" aria-label="预览 ${esc(basename(r['相对路径']))}">${thumbnail(r)}</button><div class="photo-info"><div class="photo-name" title="${esc(r['相对路径'])}">${esc(basename(r['相对路径']))}</div><span class="pill ${r['配对状态'].startsWith('missing_')?'amber':''}">${esc(r['建议标签'])}</span><div class="photo-meta" title="${esc(r['实况UUID']||r['失败环节'])}">${esc(r['实况UUID']||r['失败环节']||'无法确认是否来自实况照片')}</div></div></article>`).join('');
+ const cards=visible.map((r,n)=>`<article class="photo-card ${pairSelected.has(r['__abs'])?'selected':''}">${r['__can_delete']?`<label class="photo-checkbox"><input type="checkbox" data-pair-check="${offset+n}" aria-label="选择 ${esc(basename(r['相对路径']))}" ${pairSelected.has(r['__abs'])?'checked':''}></label>`:''}<button class="photo-image" data-pair-preview="${offset+n}" aria-label="预览 ${esc(basename(r['相对路径']))}">${thumbnail(r)}</button><div class="photo-info"><div class="photo-name" title="${esc(r['相对路径'])}">${esc(basename(r['相对路径']))}</div><span class="pill ${r['配对状态'].startsWith('missing_')?'amber':''}">${esc(r['建议标签'])}</span><div class="photo-meta" title="${esc((r['配对标识']||r['实况UUID'])||r['失败环节'])}">${esc((r['配对标识']||r['实况UUID'])||(r['配对状态']==='embedded'?'视频已嵌入照片':r['失败环节']||'无法确认是否来自实况照片'))}</div></div></article>`).join('');
  const scanning=pairState&&['queued','running'].includes(pairState.status),incomplete=pairState&&['failed','cancelled'].includes(pairState.status);
- $('pair-results').innerHTML=visible.length?`<div class="photo-grid">${cards}</div>`:empty(!pairState?'选择文件夹检查实况照片':scanning?'正在读取实况 UUID':incomplete?'检查未完成':'没有符合条件的文件',!pairState?'无需先运行任何整理任务。':scanning?'完整读取后才显示缺失配对，避免把尚未扫描的文件误判为缺失。':incomplete?'请重新检查；读取过的元数据缓存已保留。':pairFilter==='unknown'?'没有无法判断的文件。':'当前范围内未发现这一类缺失配对。','stack');
+ $('pair-results').innerHTML=visible.length?`<div class="photo-grid">${cards}</div>`:empty(!pairState?'选择文件夹检查实况照片':scanning?'正在读取实况标识':incomplete?'检查未完成':'没有符合条件的文件',!pairState?'无需先运行任何整理任务。':scanning?'完整读取后才显示缺失配对，避免把尚未扫描的文件误判为缺失。':incomplete?'请重新检查；读取过的元数据缓存已保留。':pairFilter==='unknown'?'没有无法判断的文件。':'当前范围内未发现这一类缺失配对。','stack');
  $('pair-pager').innerHTML=pairFiltered.length>pageSize?`<button data-pair-page="-1" ${pairPage===0?'disabled':''}>上一页</button><span>${pairPage+1} / ${count}</span><button data-pair-page="1" ${pairPage===count-1?'disabled':''}>下一页</button>`:'';
  const eligible=visible.filter(r=>r['__can_delete']);$('pair-select-page').disabled=!eligible.length;$('pair-select-page').checked=!!eligible.length&&eligible.every(r=>pairSelected.has(r['__abs']));
  $('pair-selection-count').textContent=` · 已选 ${pairSelected.size} 项`;$('delete-pair-files').disabled=!pairSelected.size;

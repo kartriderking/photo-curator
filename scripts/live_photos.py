@@ -1,4 +1,4 @@
-"""Independent, read-only Apple Live Photo UUID scanning with SQLite checkpoints."""
+"""Independent, read-only Apple/vivo pairing scans with SQLite checkpoints."""
 import json
 import os
 import subprocess
@@ -11,9 +11,10 @@ from cache_db import canonical, item_for
 from common import CACHE_DIR, OUTPUT_DIR, EXIFTOOL, IMAGE_EXTS, VIDEO_EXTS
 from task_store import TaskStore, encode
 
-SIGNATURE = 'apple-content-identifier-v1'
+SIGNATURE = 'apple-vivo-pair-identifier-v4'
 STATE_LABELS = {'missing_video': '缺少配对视频', 'missing_photo': '缺少配对照片',
-                'paired': '配对完整', 'no_uuid': '未读到实况 UUID', 'error': '读取失败', 'conflict': 'UUID 无法确认'}
+                'paired': '配对完整', 'embedded': '完整的单文件实况', 'no_uuid': '未读到实况标识',
+                'error': '读取失败', 'conflict': '配对标识无法确认'}
 
 
 def enumerate_media(root, recursive=True):
@@ -60,13 +61,33 @@ def identifier_from_tags(tags):
     return {'uuid': next(iter(found), None), 'issue': '', 'tags': source, 'state': 'no_uuid'}
 
 
-def extract_identifiers(paths):
+def extract_identifiers(paths, fallback=None):
     if not paths:
         return {}
+    from vivo_live import read_identifier
+    out, pending = {}, []
+    for path in paths:
+        try:
+            metadata = read_identifier(path)
+        except (ValueError, UnicodeError) as error:
+            out[canonical(path)] = {'uuid': None, 'tags': {}, 'state': 'conflict', 'issue': str(error)}
+        except OSError as error:
+            out[canonical(path)] = {'uuid': None, 'tags': {}, 'state': 'error', 'issue': str(error)}
+        else:
+            if metadata:
+                out[canonical(path)] = metadata
+            elif fallback and canonical(path) in fallback:
+                # The old extractor already read Apple's unchanged fields. Always probe
+                # vivo first so an old "no UUID" result cannot hide a private pairing ID.
+                out[canonical(path)] = fallback[canonical(path)]
+            else:
+                pending.append(path)
+    if not pending:
+        return out
     command = [EXIFTOOL, '-charset', 'filename=UTF8', '-j', '-G0:1', '-s', '-a',
                '-ContentIdentifier', '-MediaGroupUUID', '-Error', '-@', '-']
     try:
-        result = subprocess.run(command, input=('\n'.join(str(Path(p).resolve()) for p in paths) + '\n').encode('utf-8'),
+        result = subprocess.run(command, input=('\n'.join(str(Path(p).resolve()) for p in pending) + '\n').encode('utf-8'),
                                 capture_output=True, timeout=300)
     except FileNotFoundError as error:
         raise ValueError('未找到 ExifTool，请按安装说明配置 tools/exiftool.exe 或 PHOTO_CURATOR_EXIFTOOL。') from error
@@ -76,7 +97,6 @@ def extract_identifiers(paths):
     records = json.loads(text)
     if not isinstance(records, list):
         raise ValueError('ExifTool 返回格式不正确')
-    out = {}
     for record in records:
         path = record.get('SourceFile') or record.get('ExifTool:SourceFile')
         if not path:
@@ -101,7 +121,7 @@ class LivePhotoStore(TaskStore):
 
     def create_scan(self, root, recursive=True):
         state = {'id': uuid.uuid4().hex[:12], 'input_dir': str(Path(root).resolve()), 'recursive': bool(recursive),
-                 'status': 'queued', 'done': 0, 'total': 0, 'cached': 0, 'summary': {}}
+                 'status': 'queued', 'done': 0, 'total': 0, 'cached': 0, 'summary': {}, 'signature': SIGNATURE}
         with self.conn:
             self.conn.execute('INSERT INTO live_photo_scans VALUES (?,?,?,?,?,?)',
                               (state['id'], state['input_dir'], int(recursive), state['status'], encode(state), time.time()))
@@ -113,6 +133,8 @@ class LivePhotoStore(TaskStore):
             return None
         state = json.loads(row[0])
         state['status'] = row[1]
+        if state['status'] == 'done' and state.get('signature') != SIGNATURE:
+            state.update(status='stale', error='配对识别规则已更新，请重新检查以识别 vivo 两文件及单文件实况照片。')
         return state
 
     def save_state(self, state):
@@ -135,7 +157,7 @@ class LivePhotoStore(TaskStore):
             if row['metadata'].get('uuid'):
                 groups[row['metadata']['uuid']].add(row['item']['kind'])
         summary = {'paired': sum(kinds == {'photo', 'video'} for kinds in groups.values()),
-                   'missing_video': 0, 'missing_photo': 0, 'no_uuid': 0, 'error': 0, 'conflict': 0}
+                   'missing_video': 0, 'missing_photo': 0, 'no_uuid': 0, 'embedded': 0, 'error': 0, 'conflict': 0}
         updates = []
         for row in files:
             item, meta = row['item'], row['metadata']
@@ -151,18 +173,26 @@ class LivePhotoStore(TaskStore):
             self.conn.executemany('UPDATE live_photo_files SET state=? WHERE scan_id=? AND path=?', updates)
             self.conn.execute('UPDATE live_photo_scans SET status=?,data=? WHERE id=?', ('done', encode(state), state['id']))
 
-    def rows(self, scan_id):
+    def rows(self, scan_id, include_complete=False):
         state = self.scan(scan_id)
         if not state or state['status'] not in ('done', 'stale'):
             return []
         result = []
         unsafe = state['status'] == 'stale' or bool(state['summary'].get('error') or state['summary'].get('conflict'))
-        for data, name in self.conn.execute("SELECT data,state FROM live_photo_files WHERE scan_id=? AND state!='paired' ORDER BY path", (scan_id,)):
+        query = 'SELECT data,state FROM live_photo_files WHERE scan_id=?'
+        if not include_complete:
+            query += " AND state NOT IN ('paired','embedded')"
+        for data, name in self.conn.execute(query + ' ORDER BY path', (scan_id,)):
             row = json.loads(data)
             item, meta = row['item'], row['metadata']
             result.append({'相对路径': item['rel'], '类型': item['kind'], '建议标签': STATE_LABELS[name], '配对状态': name,
                            '实况UUID': meta.get('uuid') or '', '失败环节': meta.get('issue', ''),
-                           '提示': '仅表示当前扫描范围内未找到对应文件，对方可能在其他文件夹。' if name.startswith('missing_') else '无法据此判断是否是实况照片残片。',
+                           '配对标识': meta.get('identifier') or meta.get('uuid') or '',
+                           '实况类型': meta.get('format') or ('Apple' if meta.get('uuid') else ''),
+                           '提示': '同一标识的照片与视频均在当前范围内。' if name == 'paired' else
+                                   '视频已嵌在照片中，无需独立的配对视频文件。' if name == 'embedded' else
+                                   '仅表示当前扫描范围内未找到对应文件，对方可能在其他文件夹。' if name.startswith('missing_') else
+                                   '无法据此判断是否是实况照片残片。',
                            '__abs': item['path'], '__abs_best': '', '__can_delete': name.startswith('missing_') and not unsafe})
         return result
 
@@ -185,19 +215,25 @@ def run_scan(scan_id, db_path, cancel=None):
                 rows, pending = [], []
                 for item in batch:
                     cached = store.db.get(item, 'live_photo', SIGNATURE)
+                    if cached is None:
+                        for previous_signature in ('apple-vivo-pair-identifier-v3', 'apple-vivo-pair-identifier-v2'):
+                            previous = store.db.get(item, 'live_photo', previous_signature)
+                            if previous is not None and previous.get('state') != 'conflict':
+                                cached = previous
+                                break
                     if cached is not None:
                         rows.append((item, cached))
                         state['cached'] += 1
                     else:
                         pending.append(item)
-                metadata = extract_identifiers([i['path'] for i in pending])
-                computed = []
+                old_metadata = {canonical(i['path']): data for i in pending
+                                if (data := store.db.get(i, 'live_photo', 'apple-content-identifier-v1')) is not None}
+                paths = [i['path'] for i in pending]
+                metadata = extract_identifiers(paths, fallback=old_metadata) if old_metadata else extract_identifiers(paths)
                 for item in pending:
                     meta = metadata.get(canonical(item['path']), {'uuid': None, 'tags': {}, 'state': 'error', 'issue': 'ExifTool 未返回此文件的元数据'})
                     rows.append((item, meta))
-                    if meta['state'] != 'error':
-                        computed.append((item, meta, None))
-                store.db.put_many('live_photo', SIGNATURE, computed)
+                store.db.put_many('live_photo', SIGNATURE, [(item, meta, None) for item, meta in rows if meta.get('state') != 'error'])
                 store.save_files(scan_id, rows)
                 state['done'] += len(batch)
                 store.save_state(state)

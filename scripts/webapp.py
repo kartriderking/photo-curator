@@ -85,6 +85,10 @@ def _run_loop():
                 "--vlm-model", options["vlm_model"], "--scenic-threshold", str(options["scenic_threshold"]),
                 "--similar-threshold", str(options["similar_threshold"]), "--dup-hamming", str(options["dup_hamming"]),
                 "--trip-gap-hours", str(options["trip_gap_hours"])]
+        cmd.extend(['--vlm-task', options.get('vlm_task', 'landmarks')])
+        if options.get('mode'):
+            cmd.extend(['--mode', options['mode'], '--cleanup-level', options['cleanup_level'],
+                        '--content-level', options['content_level']])
         if options["include_videos"]:
             cmd.append("--include-videos")
         if options["force"]:
@@ -370,7 +374,7 @@ def delete_files(body: dict):
 
 @app.get("/api/orphans")
 def orphans(job_id: str = ''):
-    raise HTTPException(410, '请在检查实况照片页面直接选择文件夹，按 UUID 检查配对。')
+    raise HTTPException(410, '请在检查实况照片页面直接选择文件夹，按实况标识检查配对。')
 
 
 def _pair_worker(scan_id, stopped):
@@ -409,7 +413,7 @@ def pair_scan_status(scan_id: str):
         state = store.scan(scan_id)
         if state is None:
             raise HTTPException(404, '这次检查记录不存在，请重新选择文件夹检查')
-        return {**state, 'rows': store.rows(scan_id)}
+        return {**state, 'rows': store.rows(scan_id, include_complete=True)}
 
 
 @app.post('/api/live-photos/scans/{scan_id}/cancel')
@@ -449,7 +453,7 @@ def delete_pair_files(scan_id: str, body: dict):
             try:
                 f = Path(path).resolve()
                 if root not in f.parents or canonical(f) not in allowed or not f.is_file():
-                    results.append({'path': path, 'ok': False, 'msg': '不是此次 UUID 检查确认的缺失配对文件'})
+                    results.append({'path': path, 'ok': False, 'msg': '不是此次实况标识检查确认的缺失配对文件'})
                     continue
                 send2trash(str(f))
                 deleted.append(str(f))
