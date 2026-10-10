@@ -112,7 +112,8 @@
   <div id="pair-summary" class="pair-summary hidden"></div>
   <div id="pair-warning" class="result-hint hidden" role="status"></div>
   <div class="result-tabs" id="pair-tabs"></div>
-  <div class="pair-result-tools hidden" id="pair-result-tools"><label class="check-label"><input type="checkbox" id="pair-select-page">选中本页<span id="pair-selection-count"></span></label><div class="tools"><div class="search"><svg class="icon"><use href="#i-search"/></svg><input id="pair-search" placeholder="搜索文件名或配对标识" aria-label="搜索实况检查结果"></div><button class="danger" id="delete-pair-files" disabled>移入回收站</button></div></div>
+  <div class="pair-result-tools hidden" id="pair-result-tools"><div class="tools"><label class="check-label"><input type="checkbox" id="pair-select-page">选中本页<span id="pair-selection-count"></span></label><button class="link-button" id="clear-pair-selection" disabled>取消选择</button></div><div class="tools"><div class="search"><svg class="icon"><use href="#i-search"/></svg><input id="pair-search" placeholder="搜索文件名或配对标识" aria-label="搜索实况检查结果"></div><button class="danger" id="delete-pair-files" disabled>移入回收站</button></div></div>
+  <p class="muted small selection-help hidden" id="pair-selection-help">拖动框选本页，Ctrl / Shift 可追加；Ctrl+A 全选当前分类中可处理的文件。完整实况、无法判断及需要重新检查的文件会自动跳过。</p>
   <div id="pair-results"></div><div id="pair-pager" class="pager"></div>
 </section>
 </main>
