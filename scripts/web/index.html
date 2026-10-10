@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>轻相册 · 本地照片整理</title>
+<link rel="stylesheet" href="/assets/style.css">
+<script src="/assets/app.js" defer></script>
+</head>
+<body>
+<svg aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden"><defs>
+<symbol id="i-camera" viewBox="0 0 24 24"><path d="M8 5l2-2h4l2 2h3a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2z"/><circle cx="12" cy="13" r="4"/></symbol>
+<symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 012-2h5l3 3h6a2 2 0 012 2v11a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+<symbol id="i-photo" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.5"/><path d="M3 17l5-5 4 4 4-7 5 7"/></symbol>
+<symbol id="i-stack" viewBox="0 0 24 24"><rect x="7" y="3" width="14" height="14" rx="3"/><path d="M17 20H5a2 2 0 01-2-2V7M11 10l2 2 4-4"/></symbol>
+<symbol id="i-pin" viewBox="0 0 24 24"><path d="M19 10c0 5-7 11-7 11S5 15 5 10a7 7 0 0114 0z"/><circle cx="12" cy="10" r="2.5"/></symbol>
+<symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3l2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5zM20 3v4M18 5h4"/></symbol>
+<symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-8 9-8 9s-8-4-8-9V6zM8 12l3 3 5-6"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M16 16l5 5"/></symbol>
+<symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
+<symbol id="i-list" viewBox="0 0 24 24"><path d="M9 5h12M9 12h12M9 19h12M3 5h1M3 12h1M3 19h1"/></symbol>
+<symbol id="i-chevron" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></symbol>
+<symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+<symbol id="i-up" viewBox="0 0 24 24"><path d="M12 20V4M5 11l7-7 7 7"/></symbol>
+<symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 10a8 8 0 00-14-5L3 8M3 3v5h5M4 14a8 8 0 0014 5l3-3M21 21v-5h-5"/></symbol>
+<symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M4 16v4h16v-4"/></symbol>
+<symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v6M14 10v6"/></symbol>
+<symbol id="i-play" viewBox="0 0 24 24"><path d="M8 4l12 8-12 8z"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12l4 4L19 6"/></symbol>
+<symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v.1"/></symbol>
+</defs></svg>
+<aside class="sidebar">
+  <div class="brand"><div class="brand-mark"><svg class="icon"><use href="#i-camera"/></svg></div><span class="brand-text">轻相册</span></div>
+  <div class="brand-caption">照片整理，轻松一点</div>
+  <nav class="nav" aria-label="主导航">
+    <button class="nav-button active" data-page="home"><svg class="icon"><use href="#i-plus"/></svg><span>开始整理</span></button>
+    <button class="nav-button" data-page="results"><svg class="icon"><use href="#i-photo"/></svg><span>我的照片</span></button>
+    <button class="nav-button" data-page="history"><svg class="icon"><use href="#i-clock"/></svg><span>整理记录</span></button>
+    <div class="nav-separator"></div>
+    <button class="nav-button" data-page="pairs"><svg class="icon"><use href="#i-stack"/></svg><span>检查配对文件</span></button>
+  </nav>
+  <div class="sidebar-bottom"><span class="small muted"><span class="local-dot"></span>本地工作台</span><p>照片留在你的电脑里</p></div>
+</aside>
+<div class="workspace">
+<header class="topbar"><span id="page-location">开始整理</span><div class="topbar-right"><span class="small"><span class="local-dot"></span>本地运行</span><div class="avatar"><svg class="icon"><use href="#i-camera"/></svg></div></div></header>
+<main class="main">
+<section id="page-home">
+  <div class="welcome">
+    <div class="eyebrow">照片整理，从这里开始</div>
+    <h1>好照片，值得好好整理。</h1>
+    <p>去掉重复，找回回忆。让每一张照片都有自己的位置。</p>
+    <div class="welcome-art" aria-hidden="true"><div class="art-frame back"></div><div class="art-frame front"><div class="art-scene"><span class="art-sun"></span></div></div><div class="art-check"><svg class="icon"><use href="#i-check"/></svg></div></div>
+  </div>
+  <div class="card setup-card">
+    <h2 class="section-title"><span class="step-number">1</span>选择照片文件夹</h2>
+    <div class="folder-line"><div class="folder-input-wrap"><svg class="icon"><use href="#i-folder"/></svg><input id="dir" aria-label="照片文件夹路径" placeholder="粘贴文件夹路径，或点击右侧选择" autocomplete="off"></div><button class="secondary" id="choose-folder">选择文件夹</button></div>
+    <div class="recent-folders" id="recent-folders"><span class="muted small">最近使用：</span></div>
+    <div class="setup-divider"></div>
+    <h2 class="section-title"><span class="step-number">2</span>这次想怎么整理？</h2>
+    <div class="mode-grid" id="mode-grid">
+      <button class="mode-card active" data-mode="quick" aria-pressed="true"><span class="mode-select">✓</span><div class="mode-icon"><svg class="icon"><use href="#i-stack"/></svg></div><div class="mode-title">清理重复和模糊<span class="pill blue">推荐</span></div><p>找出重复与模糊照片，<br>为值得留下的回忆腾出空间。</p></button>
+      <button class="mode-card" data-mode="travel" aria-pressed="false"><span class="mode-select"></span><div class="mode-icon"><svg class="icon"><use href="#i-pin"/></svg></div><div class="mode-title">按时间和地点整理</div><p>读取拍摄时间与位置，<br>让散落的旅行照片更有条理。</p></button>
+      <button class="mode-card" data-mode="content" aria-pressed="false"><span class="mode-select"></span><div class="mode-icon"><svg class="icon"><use href="#i-sparkle"/></svg></div><div class="mode-title">识别照片内容<span class="pill amber">较慢</span></div><p>识别风景、美食和知名景点，<br>更容易找回你想要的照片。</p></button>
+    </div>
+    <div class="options-line"><label class="switch-label"><input class="switch" type="checkbox" id="videos">也整理这个文件夹里的视频</label><span id="mode-caption">轻量整理，无需启动 AI 服务</span></div>
+    <details class="advanced" id="advanced"><summary><svg class="icon"><use href="#i-chevron"/></svg>自定义功能与高级设置<span id="custom-indicator"></span></summary>
+      <div class="advanced-inner">
+        <div class="feature-grid" id="feature-options">
+          <label class="feature-option"><input type="checkbox" name="feature" value="phash" checked>查找重复照片</label>
+          <label class="feature-option"><input type="checkbox" name="feature" value="quality" checked>筛选模糊照片</label>
+          <label class="feature-option"><input type="checkbox" name="feature" value="gps">读取拍摄时间和 GPS</label>
+          <label class="feature-option"><input type="checkbox" name="feature" value="places">查找城市和地名</label>
+          <label class="feature-option"><input type="checkbox" name="feature" value="trips">按拍摄时间分组</label>
+          <label class="feature-option"><input type="checkbox" name="feature" value="classify">识别照片类别</label>
+          <label class="feature-option"><input type="checkbox" name="feature" value="similar">查找近似照片</label>
+          <label class="feature-option"><input type="checkbox" name="feature" value="landmarks">识别知名景点</label>
+          <label class="feature-option"><input type="checkbox" name="feature" value="frames">仅提取视频画面</label>
+        </div>
+        <p class="muted small" id="dependency-note" style="margin-top:14px"></p>
+        <div class="settings-grid">
+          <label>城市查询方式<select id="geo-mode"><option value="offline">离线城市（拼音 / 英文）</option><option value="online">联网中文地名</option></select></label>
+          <label>景点识别范围<select id="vlm-scope"><option value="scenic">仅风景候选照片</option><option value="no_gps">没有 GPS 的照片</option><option value="all">所有照片</option></select></label>
+          <label>时间分组间隔（小时）<input type="number" id="trip-gap" min="0.1" step="0.1" value="36"></label>
+          <label>重复匹配距离（pHash）<input type="number" id="hamming" min="0" max="64" value="4"></label>
+          <label>近似匹配阈值（CLIP）<input type="number" id="similar-thr" min="0" max="1" step="0.01" value="0.95"></label>
+          <label>风景候选阈值<input type="number" id="thr" min="0" max="1" step="0.05" value="0.35"></label>
+          <label>景点识别模型<input id="vlm-model" value="qwen3-vl:8b"></label>
+        </div>
+        <div class="advanced-notes">
+          <label class="check-label"><input type="checkbox" id="reuse-legacy-vlm" checked>复用历史景点结果（旧模型信息未知，结果会注明来源）</label>
+          <label class="check-label"><input type="checkbox" id="force">重新计算所选功能，通常不需要勾选</label>
+          <p>联网查询会发送 GPS 坐标。时间分组不一定代表旅行；近似照片需要人工确认。</p>
+        </div>
+      </div>
+    </details>
+    <div class="start-line"><div class="small-info"><svg class="icon"><use href="#i-shield"/></svg><p>自动复用已整理的结果，原照片由你决定是否删除。</p></div><button class="primary" id="start-button"><svg class="icon"><use href="#i-sparkle"/></svg>开始整理</button></div>
+  </div>
+  <div class="card activity hidden" id="activity"><div class="activity-heading"><div><h3 id="activity-title">正在整理</h3><p id="activity-detail" class="muted small" style="margin-top:4px"></p></div><button class="link-button" id="activity-results">查看照片</button></div><div class="progress-track" id="progress-track"><i id="activity-progress"></i></div><details class="details-log"><summary>查看运行详情</summary><div id="activity-stages"></div><pre id="pipe-log"></pre></details></div>
+  <div class="home-bottom"><h2>最近整理</h2><button class="link-button" data-page="history">查看全部记录 →</button></div>
+  <div class="card recent-list" id="recent-jobs"></div>
+</section>
+<section id="page-history" class="hidden"><div class="page-heading"><div><h1>整理记录</h1><p>已完成的结果都在这里，随时继续整理。</p></div><button class="primary" data-page="home"><svg class="icon"><use href="#i-plus"/></svg>新建整理</button></div><div class="card recent-list" id="history-jobs"></div></section>
+<section id="page-results" class="hidden">
+  <div class="page-heading"><div><h1 id="result-heading">我的照片</h1><p id="result-description">先看看照片，再决定哪些值得留下。</p></div><button class="secondary" id="export-button"><svg class="icon"><use href="#i-download"/></svg>导出清单</button></div>
+  <div class="result-toolbar"><div class="result-library"><svg class="icon muted"><use href="#i-folder"/></svg><select id="sel-job" aria-label="选择整理记录"><option value="">选择一个已整理的文件夹</option></select></div><div class="tools"><div class="search"><svg class="icon"><use href="#i-search"/></svg><input id="q" placeholder="搜索照片、城市或景点" aria-label="搜索照片"></div><button class="secondary" id="refresh-results" title="只刷新已有结果"><svg class="icon"><use href="#i-refresh"/></svg>刷新</button></div></div>
+  <div class="result-tabs" id="result-tabs"></div>
+  <div class="result-hint" id="result-hint"><svg class="icon"><use href="#i-info"/></svg><span>整理建议仅供参考，点击照片可以放大查看。</span></div>
+  <div class="view-bar"><label class="check-label"><input type="checkbox" id="select-page">选中本页<span id="res-count"></span></label><div class="view-controls"><select id="sort-order" aria-label="照片排序"><option value="default">默认排序</option><option value="date-desc">最新拍摄在前</option><option value="date-asc">最早拍摄在前</option><option value="name">按文件名</option></select><div class="segmented"><button class="active" data-view="grid" title="缩略图" aria-label="缩略图视图"><svg class="icon"><use href="#i-grid"/></svg></button><button data-view="list" title="列表" aria-label="列表视图"><svg class="icon"><use href="#i-list"/></svg></button></div></div></div>
+  <div id="photo-results"></div><div id="pager" class="pager"></div>
+</section>
+</main>
+</div>
+<div class="selection-bar hidden" id="selection-bar"><div><span id="selection-count"></span><button class="link-button" id="clear-selection">取消选择</button></div><button class="danger" id="delete-button"><svg class="icon"><use href="#i-trash"/></svg>移入回收站</button></div>
+<div class="overlay hidden" id="folder-overlay" role="dialog" aria-modal="true" aria-labelledby="folder-title">
+  <div class="modal"><div class="modal-head"><h2 id="folder-title">选择照片文件夹</h2><button class="icon-button" data-close="folder-overlay" aria-label="关闭文件夹选择"><svg class="icon"><use href="#i-close"/></svg></button></div>
+    <div class="modal-body"><div class="picker-path"><button class="icon-button" id="folder-up" title="返回上一级"><svg class="icon"><use href="#i-up"/></svg></button><input id="folder-path" aria-label="浏览文件夹路径" placeholder="此电脑"><button class="secondary" id="folder-go">前往</button></div><div class="picker-folders" id="folder-list"></div></div>
+    <div class="modal-foot"><span class="muted small" id="folder-caption">双击文件夹名称进入，选择当前文件夹开始整理。</span><button class="primary" id="folder-confirm" disabled>选择此文件夹</button></div>
+  </div>
+</div>
+<div class="overlay hidden" id="preview-overlay" role="dialog" aria-modal="true" aria-labelledby="preview-title">
+  <div class="modal preview"><div class="modal-head"><h2 id="preview-title">照片预览</h2><button class="icon-button" data-close="preview-overlay" aria-label="关闭照片预览"><svg class="icon"><use href="#i-close"/></svg></button></div><div class="preview-layout"><div class="preview-media" id="preview-media"></div><aside class="preview-info" id="preview-info"></aside></div>
+    <div class="preview-foot"><div class="preview-nav"><button class="icon-button" id="preview-prev" aria-label="上一张"><svg class="icon" style="transform:rotate(180deg)"><use href="#i-chevron"/></svg></button><span id="preview-position"></span><button class="icon-button" id="preview-next" aria-label="下一张"><svg class="icon"><use href="#i-chevron"/></svg></button></div><label class="check-label"><input type="checkbox" id="preview-select">选中这张</label><button class="link-button" id="preview-original">查看原图 ↗</button></div>
+  </div>
+</div>
+<div class="toast hidden" id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

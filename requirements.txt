@@ -1,0 +1,12 @@
+numpy>=2.0,<3
+pandas>=2.2,<4
+pyarrow>=16
+Pillow>=10
+pillow-heif>=0.18
+opencv-python-headless>=4.10
+ImageHash>=4.3.1
+requests>=2.32
+reverse_geocoder>=1.5.1
+fastapi>=0.115
+uvicorn>=0.30
+Send2Trash>=1.8.3
