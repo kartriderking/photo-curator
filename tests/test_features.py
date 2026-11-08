@@ -5,13 +5,14 @@ import random
 import sys
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from cache_db import CacheDB, canonical, item_for, version
 from feature_config import dependencies, normalize_options, signature
-from pipeline import execute, export_results, phash_groups, similar_groups
+from pipeline import execute, export_results, phash_groups, refresh_results, similar_groups
 from task_store import TaskStore
 
 
@@ -79,9 +80,37 @@ class FeaturesTest(unittest.TestCase):
     def test_joint_measurements_decode_once(self):
         self.photo('a.jpg')
         from common import load_image
-        with patch('common.load_image', wraps=load_image) as load:
+        with patch('common.load_image', wraps=load_image) as load, \
+             patch('pipeline.ThreadPoolExecutor', wraps=ThreadPoolExecutor) as pool:
             self.run_features(['phash', 'quality'])
         self.assertEqual(load.call_count, 1)
+        self.assertIsInstance(load.call_args.args[1], bytes)
+        self.assertLessEqual(pool.call_args.kwargs['max_workers'], 2)
+
+    def test_quick_pipeline_publishes_only_inventory_and_completed_feature(self):
+        self.photo('a.jpg')
+        with patch('pipeline.refresh_results', wraps=refresh_results) as publish:
+            self.run_features(['phash', 'quality'])
+        self.assertEqual(publish.call_count, 2)
+        self.assertFalse(publish.call_args_list[0].kwargs['validate_files'])
+        self.assertTrue(publish.call_args_list[1].kwargs['validate_files'])
+
+    def test_file_read_failure_does_not_stop_other_photos(self):
+        self.photo('a.jpg')
+        self.photo('b.jpg')
+        original = Path.read_bytes
+
+        def fail_first(path):
+            if path.name == 'a.jpg':
+                raise OSError('disk read failed')
+            return original(path)
+
+        with patch('pathlib.Path.read_bytes', fail_first):
+            jd, state = self.run_features(['quality'])
+        self.assertEqual(state['status'], 'partial')
+        self.assertEqual(state['features']['quality']['done'], 2)
+        self.assertIn('disk read failed', self.report(jd).set_index('相对路径').loc['a.jpg', '失败环节'])
+        self.assertEqual(self.report(jd).set_index('相对路径').loc['b.jpg', '失败环节'], '')
 
     def test_modified_file_invalidates_cache(self):
         item = self.photo('a.jpg')

@@ -115,15 +115,16 @@ def scan_files(input_dir: str):
     return df
 
 
-def load_image(path: str):
+def load_image(path: str, data=None):
     """读图为 RGB PIL.Image，兼容 HEIC/HEIF，自动按 EXIF 方向摆正。"""
+    import io
     from PIL import Image, ImageOps
     try:
         from pillow_heif import register_heif_opener
         register_heif_opener()
     except ImportError:
         pass
-    img = Image.open(path)
+    img = Image.open(io.BytesIO(data) if data is not None else path)
     img = ImageOps.exif_transpose(img).convert("RGB")
     return img
 

@@ -3,6 +3,7 @@ import hashlib
 import os
 import time
 import uuid
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -30,12 +31,24 @@ def scan(root, include_videos):
         raise ValueError(f'图库不存在: {root}')
     items = []
     excluded = [CACHE_DIR.resolve(), OUTPUT_DIR.resolve()]
-    for p in root.rglob('*'):
-        if not p.is_file() or any(p.is_relative_to(d) for d in excluded):
-            continue
-        ext = p.suffix.lower()
-        if ext in IMAGE_EXTS or (include_videos and ext in VIDEO_EXTS):
-            items.append(item_for(p, root, 'video' if ext in VIDEO_EXTS else 'photo'))
+
+    def walk(folder):
+        if any(folder.is_relative_to(d) for d in excluded):
+            return
+        with os.scandir(folder) as entries:
+            for entry in entries:
+                p = Path(entry.path)
+                if entry.is_dir(follow_symlinks=False):
+                    walk(p)
+                    continue
+                ext = p.suffix.lower()
+                if ext not in IMAGE_EXTS and not (include_videos and ext in VIDEO_EXTS):
+                    continue
+                if entry.is_file():
+                    items.append(item_for(p, root, 'video' if ext in VIDEO_EXTS else 'photo',
+                                          stat_result=entry.stat()))
+
+    walk(root)
     return sorted(items, key=lambda r: r['rel'].lower())
 
 
@@ -46,25 +59,26 @@ def legacy_vlm(db, item, opts):
     return data
 
 
-def measure_image(item, do_phash, do_quality):
+def measure_image(item, do_phash, do_quality, data=None):
     from common import load_image
     import numpy as np
     try:
-        img = load_image(item['path'])
-        w, h = img.size
-        result = {'width': w, 'height': h}
-        if do_phash:
-            import imagehash
-            result['phash'] = str(imagehash.phash(img))
-        if do_quality:
-            import cv2
-            # Same measurement scale as existing cache; portrait images now avoid huge arrays.
-            gray = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2GRAY)
-            if w > 1024:
-                gray = cv2.resize(gray, (1024, max(1, int(h * 1024 / w))))
-            result.update(sharpness=float(cv2.Laplacian(gray, cv2.CV_64F).var()), brightness=float(gray.mean()))
-        img.close()
-        return item, result, None
+        img = load_image(item['path'], data)
+        try:
+            w, h = img.size
+            result = {'width': w, 'height': h}
+            if do_phash:
+                import imagehash
+                result['phash'] = str(imagehash.phash(img))
+            if do_quality:
+                import cv2
+                gray = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2GRAY)
+                if w > 1024:
+                    gray = cv2.resize(gray, (1024, max(1, int(h * 1024 / w))))
+                result.update(sharpness=float(cv2.Laplacian(gray, cv2.CV_64F).var()), brightness=float(gray.mean()))
+            return item, result, None
+        finally:
+            img.close()
     except Exception as ex:
         return item, None, str(ex)
 
@@ -150,7 +164,6 @@ def execute(root, options, job_dir, db_path=None):
     db = CacheDB(db_path)
     store = TaskStore(db=db)
     job = store.ensure_task(job_dir, root, options)
-    last_checkpoint = [0.0]
 
     def persist():
         store.save_progress(job['id'], state)
@@ -160,11 +173,10 @@ def execute(root, options, job_dir, db_path=None):
             state['features'][f].update(status=status_name, done=done, total=total, cached=cached)
         persist()
 
-    def checkpoint(force=False):
-        if not force and time.monotonic() - last_checkpoint[0] < 30:
-            return
-        refresh_results(job_dir, db=db, snapshot=snapshot)
-        last_checkpoint[0] = time.monotonic()
+    def publish_results(validate_files=True):
+        started = time.monotonic()
+        refresh_results(job_dir, db=db, snapshot=snapshot, validate_files=validate_files)
+        print(f'结果已发布，耗时 {time.monotonic() - started:.1f}s', flush=True)
 
     def error(item, feature, ex):
         errors.setdefault(canonical(item['path']), {})[feature] = str(ex)[:180]
@@ -175,13 +187,15 @@ def execute(root, options, job_dir, db_path=None):
         imported = db.import_legacy()
         if imported:
             print(f'旧缓存导入: {imported}', flush=True)
+        scan_started = time.monotonic()
         items = scan(root, options['include_videos'])
+        print(f'文件清单: {len(items)} 项，耗时 {time.monotonic() - scan_started:.1f}s', flush=True)
         snapshot['items'] = items
         state.update(total_files=len(items), total_photos=sum(i['kind'] == 'photo' for i in items), total_videos=sum(i['kind'] == 'video' for i in items))
         db.set_manifest(root, items)
         photos = [i for i in items if i['kind'] == 'photo']
         force = options['force']
-        checkpoint(True)
+        publish_results(validate_files=False)
         if 'gps' in active:
             from step1_metadata import extract_exif, _parse_dt
             pending = [i for i in items if force or db.get(i, 'metadata', signature('metadata')) is None]
@@ -203,9 +217,8 @@ def execute(root, options, job_dir, db_path=None):
                     rows.append((i, e, None))
                 db.put_many('metadata', signature('metadata'), rows)
                 status(['gps'], 'running', cached + min(start + 400, len(pending)), len(items), cached)
-                checkpoint()
             status(['gps'], 'partial' if any('gps' in e for e in errors.values()) else 'done', len(items), len(items), cached)
-            checkpoint(True)
+            publish_results()
 
         # Video pixels are decoded only when video content analysis is explicitly requested.
         frames = []
@@ -240,7 +253,7 @@ def execute(root, options, job_dir, db_path=None):
             if 'frames' in active:
                 status(['frames'], state['video_analysis']['status'], len(videos), len(videos))
             snapshot['frames'] = frames
-            checkpoint(True)
+            publish_results()
 
         measures = [f for f in ('phash', 'quality') if f in active]
         quality = {}
@@ -253,26 +266,46 @@ def execute(root, options, job_dir, db_path=None):
             cached = len(photos) - len(pending)
             status(measures, 'running', cached, len(photos), cached)
             buffered = {f: [] for f in measures}
-            with ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 2)) as workers:
-                # Small windows bound decoded image memory and allow prompt cancellation.
-                for start in range(0, len(pending), 32):
-                    batch = pending[start:start + 32]
-                    results = workers.map(lambda args: measure_image(*args), batch)
-                    for (i, needs_hash, needs_quality), (_, result, ex) in zip(batch, results):
-                        if ex:
-                            for f, needed in [('phash', needs_hash), ('quality', needs_quality)]:
-                                if needed:
-                                    error(i, f, ex)
-                        else:
-                            if needs_hash:
-                                buffered['phash'].append((i, {k: result[k] for k in ('phash', 'width', 'height')}, None))
-                            if needs_quality:
-                                buffered['quality'].append((i, {k: result[k] for k in ('sharpness', 'brightness', 'width', 'height')}, None))
+            completed = 0
+            measure_started = time.monotonic()
+
+            def collect(args, outcome):
+                nonlocal completed
+                i, needs_hash, needs_quality = args
+                _, result, ex = outcome
+                if ex:
+                    for f, needed in [('phash', needs_hash), ('quality', needs_quality)]:
+                        if needed:
+                            error(i, f, ex)
+                else:
+                    if needs_hash:
+                        buffered['phash'].append((i, {k: result[k] for k in ('phash', 'width', 'height')}, None))
+                    if needs_quality:
+                        buffered['quality'].append((i, {k: result[k] for k in ('sharpness', 'brightness', 'width', 'height')}, None))
+                completed += 1
+                if completed % 32 == 0 or completed == len(pending):
                     for f in measures:
                         db.put_many(f, signature(f), buffered[f])
                         buffered[f].clear()
-                    status(measures, 'running', cached + min(start + 32, len(pending)), len(photos), cached)
-                    checkpoint()
+                    status(measures, 'running', cached + completed, len(photos), cached)
+
+            # Only the main thread reads file bytes, avoiding concurrent seeks on mechanical disks.
+            with ThreadPoolExecutor(max_workers=min(2, os.cpu_count() or 1)) as workers:
+                running = deque()
+                for args in pending:
+                    try:
+                        data = Path(args[0]['path']).read_bytes()
+                    except Exception as ex:
+                        collect(args, (args[0], None, str(ex)))
+                        continue
+                    running.append((args, workers.submit(measure_image, args[0], args[1], args[2], data)))
+                    if len(running) >= 4:
+                        previous, future = running.popleft()
+                        collect(previous, future.result())
+                while running:
+                    args, future = running.popleft()
+                    collect(args, future.result())
+            print(f'pHash / 清晰度: {completed} 项新分析，耗时 {time.monotonic() - measure_started:.1f}s', flush=True)
             for i in photos:
                 q = db.get(i, 'quality', signature('quality')) if 'quality' in active else None
                 h = db.get(i, 'phash', signature('phash')) if 'phash' in active else None
@@ -283,7 +316,7 @@ def execute(root, options, job_dir, db_path=None):
                 snapshot['phash_groups'] = phash_groups(ranked, quality, options['dup_hamming'])
             for f in measures:
                 status([f], 'partial' if any(f in e for e in errors.values()) else 'done', len(photos), len(photos), cached)
-            checkpoint(True)
+            publish_results()
 
         clips, vectors = {}, {}
         clip_features = [f for f in ('classify', 'similar') if f in active]
@@ -328,7 +361,6 @@ def execute(root, options, job_dir, db_path=None):
                                     error(i, f, ex)
                     db.put_many('clip', signature('clip'), rows)
                     status(clip_features, 'running', cached + min(start + bs, len(pending)), len(clip_items), cached)
-                    checkpoint()
                 del scorer
                 import gc
                 gc.collect()
@@ -341,7 +373,7 @@ def execute(root, options, job_dir, db_path=None):
                 snapshot['similar_groups'] = similar_groups(pool, vectors, options['similar_threshold'])
             for f in clip_features:
                 status([f], 'partial' if any(f in e for e in errors.values()) else 'done', len(clip_items), len(clip_items), cached)
-            checkpoint(True)
+            publish_results()
 
         if 'places' in active:
             geo_items = [i for i in items if (db.get(i, 'metadata', signature('metadata')) or {}).get('gps_lat') is not None
@@ -373,10 +405,8 @@ def execute(root, options, job_dir, db_path=None):
                         error(i, 'places', ex)
                         time.sleep(geocode.LIMIT_SLEEP)
                     status(['places'], 'running', cached + n, len(geo_items), cached)
-                    if n % 20 == 0:
-                        checkpoint()
             status(['places'], 'partial' if any('places' in e for e in errors.values()) else 'done', len(geo_items), len(geo_items), cached)
-            checkpoint(True)
+            publish_results()
 
         if 'landmarks' in active:
             import requests
@@ -424,7 +454,6 @@ def execute(root, options, job_dir, db_path=None):
                         status(['landmarks'], 'partial', cached + n, len(candidates), cached)
                         break
                 status(['landmarks'], 'running', cached + n, len(candidates), cached)
-                checkpoint()
             attempted = cached + (n if pending else 0)
             status(['landmarks'], 'partial' if any('landmarks' in e for e in errors.values()) else 'done', attempted, len(candidates), cached)
             if pending:
@@ -432,13 +461,13 @@ def execute(root, options, job_dir, db_path=None):
                     requests.post(f'{CONFIG["ollama_url"]}/api/generate', json={'model': options['vlm_model'], 'keep_alive': 0}, timeout=5)
                 except requests.RequestException:
                     pass
-            checkpoint(True)
+            publish_results()
         if 'trips' in active:
             status(['trips'], 'done', len(items), len(items))
+            publish_results()
         state['status'] = 'partial' if errors else 'done'
         state['finished'] = time.time()
         persist()
-        checkpoint(True)
         print('完成: 整理结果已保存到 SQLite', flush=True)
         return state
     except BaseException as ex:
@@ -448,7 +477,7 @@ def execute(root, options, job_dir, db_path=None):
                 info['status'] = 'failed'
         try:
             persist()
-            checkpoint(True)
+            publish_results()
         except Exception as save_ex:
             print(f'保存失败状态时出错: {save_ex}', flush=True)
         raise
@@ -456,7 +485,7 @@ def execute(root, options, job_dir, db_path=None):
         db.close()
 
 
-def refresh_results(job_dir, db=None, snapshot=None):
+def refresh_results(job_dir, db=None, snapshot=None, validate_files=True):
     """Refresh SQLite rows from the snapshot/cache; never write CSV or run inference."""
     import pandas as pd
     job_dir = Path(job_dir)
@@ -494,6 +523,9 @@ def refresh_results(job_dir, db=None, snapshot=None):
         items = []
         changed = set()
         for i in snapshot['items']:
+            if not validate_files:
+                items.append(i)
+                continue
             try:
                 if Path(i['path']).is_file():
                     items.append(i)

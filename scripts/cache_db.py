@@ -37,11 +37,11 @@ def version(path):
     return f'{st.st_size}:{st.st_mtime_ns}'
 
 
-def item_for(path, root, kind='photo'):
+def item_for(path, root, kind='photo', stat_result=None):
     p = Path(path).resolve()
-    st = p.stat()
+    st = stat_result or p.stat()
     rel = str(p.relative_to(Path(root).resolve()))
-    ver = version(p)
+    ver = f'{st.st_size}:{st.st_mtime_ns}'
     return {'path': str(p), 'rel': rel, 'kind': kind, 'size': st.st_size,
             'mtime': st.st_mtime, 'version': ver,
             'key': hashlib.sha1(f'{canonical(p)}|{ver}'.encode()).hexdigest()[:24]}
